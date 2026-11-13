@@ -119,6 +119,37 @@ await call('/fish-school/v1/knowledge', { query: '?limit=100' });
 const elapsed = Date.now() - t0;
 ok('cached panel refresh stays fast', elapsed < 600, `${elapsed}ms`);
 
+// Sidebar visibility is stored on the host so the settings card and the panel agree
+// across refreshes and browsers.
+const settings0 = await call('/fish-school/v1/settings');
+ok('settings default to showing the sidebar entry', settings0.body.sidebarEnabled === true,
+  JSON.stringify(settings0.body));
+
+const settingsOff = await call('/fish-school/v1/settings', {
+  method: 'POST',
+  body: JSON.stringify({ sidebarEnabled: false }),
+});
+ok('POST /settings hides the sidebar entry', settingsOff.body.sidebarEnabled === false);
+
+const settingsAgain = await call('/fish-school/v1/settings');
+ok('the new value survives a fresh read', settingsAgain.body.sidebarEnabled === false);
+ok('the value is written to settings.json',
+  JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8')).sidebarEnabled === false);
+
+const statusOff = await call('/fish-school/v1/status');
+ok('status reports sidebarEnabled', statusOff.body.sidebarEnabled === false);
+
+const settingsBad = await call('/fish-school/v1/settings', {
+  method: 'POST', body: JSON.stringify({ nope: 1 }),
+});
+ok('POST /settings rejects an unknown key', settingsBad.status === 400, `status=${settingsBad.status}`);
+
+await call('/fish-school/v1/settings', {
+  method: 'POST', body: JSON.stringify({ sidebarEnabled: true }),
+});
+ok('the entry can be shown again',
+  (await call('/fish-school/v1/settings')).body.sidebarEnabled === true);
+
 rmSync(dir, { recursive: true, force: true });
 const failed = checks.filter(c => !c.ok);
 console.log(`\n${checks.length - failed.length}/${checks.length} passed`);

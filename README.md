@@ -99,6 +99,33 @@ plugin_manager(action="install_bundle", target="@yourteam/fish-school@1.1.0", en
 `npm pack` 会生成 `local-fish-school-1.1.0.tgz`，适合用 IM 传给对方。对方用 `file:` 前缀作为安装 spec。
 （这条依赖 pnpm 对 `file:` 的处理，我没有实测过，优先用 A 或 B。）
 
+## 侧栏入口
+
+侧栏里的鱼图标可以在 **设置 → 插件 → 鱼群** 里开关（「侧栏入口」一行，显示 / 不显示）。
+
+- 开关是**即时生效**的：`slots.register` 返回 disposer，关掉就是撤销注册，不需要刷新页面、更不需要重启 DSH。
+- 偏好存在宿主侧（`%USERPROFILE%\.dsh\profiles\desktop\fish-school\settings.json`），不是浏览器 localStorage —— 否则面板和设置卡片会各看各的，换浏览器还会不一致。
+- 关掉侧栏入口不影响设置卡片本身，也不影响 Agent 工具和输入框左侧的 🐟 引用按钮。
+- 刷新页面时先读设置再挂载，所以关掉之后不会闪一下再消失。
+
+## 安装/更新后要不要重启
+
+结论先给：**首次安装不需要重启，只有「换掉整个包目录」的更新才需要。**
+
+| 场景 | 会发生什么 | 是否要重启 DSH |
+|---|---|---|
+| 首次安装（新包） | `install_bundle`/`set_bundle` 返回 `application: "applied"`，插件当时就能工作 | 否，刷新页面即可看到侧栏图标 |
+| 原地更新（`-Hot`） | 目录不变，插件重载后生效 | 否 |
+| 替换目录的更新（`pnpm install` 重建了 `node_modules\@local\fish-school`） | DSH 返回 `restart-required`，原因 `package-moved` | 是 |
+
+首次安装这一条是在 DSH 0.2.2-rc.1 上实测的：临时装了一个只有一条 HTTP 路由的探针插件，`set_bundle` 返回 `application: "applied"`，并且**没有重启**就能 `curl` 到它的路由。
+
+`package-moved` 不是鱼群能绕过的：DSH 在启动时记下了包的解析路径，目录一换就无法在进程内替换。所以想避免重启就选 `-Hot`。
+
+### 为什么侧栏图标要刷新页面才出现
+
+前端 bundle 由 DSH 的 client-modules 按「活跃 loader 条目」下发，浏览器需要重新拉取模块表。刷新一次页面即可，这和重启 DSH 是两件事。
+
 ## 更新版本
 
 装过一次之后，升级**不需要先卸载**插件，只要让 `node_modules\@local\fish-school` 里的代码换成新的。下面两种方式都在 1.4.0 上实测过，区别是**要不要重启 DSH**：

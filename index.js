@@ -3,7 +3,7 @@
  */
 
 import { join } from 'node:path';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { createStore } from './lib/store.js';
 import { startNetwork } from './lib/network.js';
 
@@ -159,6 +159,25 @@ export function apply(ctx, config = {}) {
       res.end(JSON.stringify(body));
     };
 
+    // Sidebar visibility lives on the host, not in localStorage: the panel and the
+    // settings card are two separate React trees, and a browser-local flag would make
+    // them disagree after a refresh or on another browser.
+    const settingsFile = join(config.storageDir, 'settings.json');
+    function readSettings() {
+      try {
+        const data = JSON.parse(readFileSync(settingsFile, 'utf8'));
+        return { sidebarEnabled: data?.sidebarEnabled !== false };
+      } catch {
+        return { sidebarEnabled: true };
+      }
+    }
+    let settings = readSettings();
+    function writeSettings(patch) {
+      settings = { ...settings, ...patch };
+      writeFileSync(settingsFile, JSON.stringify(settings, null, 2), 'utf8');
+      return settings;
+    }
+
     // GET /fish-school/v1/status
     ctx.effect(() => webServer.register({
       kind: 'exact', path: '/fish-school/v1/status',
@@ -176,8 +195,31 @@ export function apply(ctx, config = {}) {
             knowledgeCount: store.all().length,
             peers: network.listPeers(),
             interfaces: network.interfaces(),
+            sidebarEnabled: settings.sidebarEnabled,
           });
         } catch (err) { return send(res, 500, { error: err.message }); }
+      },
+    }));
+
+    // GET /fish-school/v1/settings, POST to change one key.
+    ctx.effect(() => webServer.register({
+      kind: 'exact', path: '/fish-school/v1/settings',
+      async handler(req, res) {
+        const rejection = connection.requestRejection({ headers: req.headers });
+        if (rejection) return send(res, rejection, { error: 'unauthorized' });
+        if (req.method === 'GET') {
+          return send(res, 200, { ...settings, version: CURRENT_VERSION });
+        }
+        if (req.method !== 'POST') return send(res, 405, { error: 'method not allowed' });
+        try {
+          let raw = '';
+          for await (const chunk of req) { raw += chunk; if (raw.length > 4096) throw new Error('Body too large'); }
+          const body = JSON.parse(raw || '{}');
+          const patch = {};
+          if ('sidebarEnabled' in body) patch.sidebarEnabled = Boolean(body.sidebarEnabled);
+          if (!Object.keys(patch).length) throw new Error('No known setting in body');
+          return send(res, 200, { ...writeSettings(patch), version: CURRENT_VERSION });
+        } catch (err) { return send(res, 400, { error: err.message }); }
       },
     }));
 
