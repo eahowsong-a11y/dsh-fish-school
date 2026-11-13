@@ -1,10 +1,10 @@
-// Fish School client: sidebar icon + main panel (my fish, knowledge library, peers).
+// Fish School client: sidebar icon + main panel (my fish, knowledge library, peers, shares).
 window.__ModuleLoader__.load({
   id: '@local/fish-school',
   factory(require) {
     const React = require('react');
     const h = React.createElement;
-    const { useState, useEffect, useCallback } = React;
+    const { useState, useEffect, useCallback, useRef } = React;
     const NS = 'fish-school';
     const API = '/fish-school/v1';
 
@@ -43,6 +43,16 @@ window.__ModuleLoader__.load({
         show: 'Show', hide: 'Hide',
         sidebarSaveFailed: 'Could not save: {e}',
         summarizePrompt: 'Summarize our conversation so far and publish it to the fish school:\n1) write 5-10 bullets covering the conclusions, decisions and reusable practices;\n2) then call fish_school_publish with a one-line summary, the full bullets as content, and comma-separated tags.',
+        shares: 'Shares', newShare: 'New share', shareKind: 'Kind', shareFolder: 'Folder', shareProject: 'Project',
+        sharePath: 'Path', sharePathHint: 'Absolute path, e.g. C:\\docs', shareVisibility: 'Visibility',
+        sharePublicOpt: 'Public', sharePrivateOpt: 'Private (default)', shareCreate: 'Create', shareResync: 'Resync', shareDelete: 'Delete',
+        syncScanning: 'Scanning…', syncImporting: 'Importing…', syncProgress: '{done}/{total}', syncDone: 'Synced', syncError: 'Error', syncOverLimit: 'Over limit',
+        uploadFolder: 'Upload folder', uploadFolderDrop: 'or drop a folder', uploadFolderCount: '{n} files, {kb} KB',
+        uploadFolderSkipped: '{n} skipped (binary / too large)', uploadFolderProgress: '{done}/{total} uploaded',
+        updateBtn: 'Update', updating: 'Updating…', updateDone: 'Updated! Restart DSH to apply.',
+        recentRefs: 'Recent references', browseFish: 'Browse by fish', refBack: '← All fish', refSearchPlaceholder: 'Search…',
+        offline: 'Offline', shareManual: 'Manual', shareUpload: 'Upload', shareName: 'Name', noShares: 'No shares yet.',
+        refNoMatch: 'No matches', refKeys: '↑↓ move · Enter insert · Esc close',
       },
       zh: {
         title: '鱼群', subtitle: '在局域网内的 DeepSeek Harness 实例间共享知识',
@@ -78,6 +88,16 @@ window.__ModuleLoader__.load({
         show: '显示', hide: '不显示',
         sidebarSaveFailed: '保存失败：{e}',
         summarizePrompt: '请总结我们刚才这段对话并发布到鱼群：\n1) 用 5-10 条要点写出结论、决策和可复用的做法；\n2) 然后调用 fish_school_publish 发布，summary 写一句话标题，content 放完整要点，tags 用逗号分隔。',
+        shares: '共享', newShare: '新建共享单元', shareKind: '类型', shareFolder: '文件夹', shareProject: '对话项目',
+        sharePath: '路径', sharePathHint: '绝对路径，例如 C:\\harper\\docs', shareVisibility: '可见性',
+        sharePublicOpt: '公开', sharePrivateOpt: '私有（默认）', shareCreate: '创建', shareResync: '重新扫描', shareDelete: '删除',
+        syncScanning: '扫描中…', syncImporting: '导入中…', syncProgress: '{done}/{total}', syncDone: '已同步', syncError: '出错', syncOverLimit: '超出上限',
+        uploadFolder: '上传文件夹', uploadFolderDrop: '或拖入文件夹', uploadFolderCount: '{n} 个文件，{kb} KB',
+        uploadFolderSkipped: '{n} 个已跳过（二进制/过大）', uploadFolderProgress: '{done}/{total} 已上传',
+        updateBtn: '一键更新', updating: '更新中…', updateDone: '已更新！重启 DSH 生效。',
+        recentRefs: '最近引用', browseFish: '按鱼浏览', refBack: '← 全部鱼', refSearchPlaceholder: '搜索…',
+        offline: '离线', shareManual: '手动', shareUpload: '上传', shareName: '名称', noShares: '还没有共享单元。',
+        refNoMatch: '没有匹配项', refKeys: '↑↓ 选择 · Enter 插入 · Esc 关闭',
       },
     };
 
@@ -130,7 +150,24 @@ window.__ModuleLoader__.load({
       return [state, refresh, setState];
     }
 
-    // Copy to clipboard with fallback
+    function useLibrary() {
+      const [state, setState] = useState({ groups: [], error: null, loading: true });
+      const refresh = useCallback(async () => {
+        try {
+          const data = await api('/library');
+          setState({ groups: data.fish || [], error: null, loading: false });
+        } catch (err) {
+          setState(prev => ({ ...prev, error: err.message, loading: false }));
+        }
+      }, []);
+      useEffect(() => {
+        refresh();
+        const id = setInterval(refresh, 5000);
+        return () => clearInterval(id);
+      }, [refresh]);
+      return [state, refresh];
+    }
+
     function copyText(text) {
       try { navigator.clipboard.writeText(text); } catch {
         const ta = document.createElement('textarea');
@@ -139,14 +176,8 @@ window.__ModuleLoader__.load({
       }
     }
 
-    // Current vs published version. DSH shows the package badge but cannot check a
-    // `file:` dependency for updates, so the panel reports it here.
     const activeBtn = S.activeBtn;
 
-    // A slot registration can be retracted with the disposer `slots.register` returns.
-    // That is what makes the sidebar entry switchable without a page reload: hiding it
-    // calls the disposer, showing it registers again. Nothing is torn down until the
-    // slot the entry belongs to actually exists, hence `available()`.
     function createGate(register, initiallyVisible = true) {
       let ready = false;
       let wanted = initiallyVisible;
@@ -174,8 +205,6 @@ window.__ModuleLoader__.load({
       };
     }
 
-    // The Fish school card on DSH's plugin settings page. Mirrors the market's own
-    // card: version on top, then the sidebar switch.
     function SettingsCard({ t, status, update, onCheck, sidebar, onToggleSidebar }) {
       const on = sidebar.enabled;
       return h('div', { style: { ...S.card, marginBottom: 0 } },
@@ -214,6 +243,8 @@ window.__ModuleLoader__.load({
     }
 
     function VersionNotice({ t, status, update, onCheck }) {
+      const [isUpdating, setIsUpdating] = useState(false);
+      const [updateMsg, setUpdateMsg] = useState('');
       const d = update.data;
       const busy = update.busy;
       const hasUpdate = Boolean(d?.hasUpdate);
@@ -227,6 +258,37 @@ window.__ModuleLoader__.load({
         : d?.latest ? `${t('upToDate')}（v${d.current}）`
         : t('updateFailed');
 
+      const doUpdate = useCallback(async () => {
+        if (isUpdating) return;
+        setIsUpdating(true);
+        setUpdateMsg('');
+        try {
+          await api('/update', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+          const pollUpdate = async () => {
+            for (let i = 0; i < 30; i++) {
+              try {
+                const status = await api('/update/status');
+                if (status.state === 'done') {
+                  setUpdateMsg(t('updateDone'));
+                  setIsUpdating(false);
+                  return;
+                } else if (status.state === 'error') {
+                  setUpdateMsg(status.message || t('updateFailed'));
+                  setIsUpdating(false);
+                  return;
+                }
+              } catch (err) {}
+              await new Promise(r => setTimeout(r, 2000));
+            }
+            setIsUpdating(false);
+          };
+          pollUpdate();
+        } catch (err) {
+          setUpdateMsg(err.message);
+          setIsUpdating(false);
+        }
+      }, [isUpdating, t]);
+
       return h('div', {
         style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 10,
           fontSize: 11.5, color },
@@ -237,12 +299,17 @@ window.__ModuleLoader__.load({
           style: { color: 'var(--dsw-alias-brand-primary)', textDecoration: 'underline' },
         }, 'Release'),
         hasUpdate && d.assetName && h('span', { style: S.muted }, d.assetName),
+        hasUpdate && h('button', {
+          style: { ...S.btnSmall, color: 'var(--dsw-alias-brand-primary)' },
+          disabled: isUpdating, onClick: doUpdate
+        }, isUpdating ? t('updating') : '⬇️ ' + t('updateBtn')),
         h('button', { style: S.btnSmall, disabled: busy, onClick: onCheck },
           busy ? t('checkingUpdate') : t('checkUpdate')),
         h('a', {
           href: `https://github.com/${status.updateRepo ?? ''}`, target: '_blank', rel: 'noreferrer',
           style: { ...S.muted, textDecoration: 'underline' },
-        }, '@' + (status.updateRepo ?? ''))
+        }, '@' + (status.updateRepo ?? '')),
+        updateMsg && h('div', { style: { fontSize: 10.5, width: '100%', color: 'var(--dsw-alias-label-secondary)' } }, updateMsg)
       );
     }
 
@@ -300,16 +367,15 @@ window.__ModuleLoader__.load({
       );
     }
 
-    // Panel control: publish a local text file as knowledge.
     function UploadCard({ t, onUploaded }) {
-      const [file, setFile] = useState(null); // { name, size, mime, text }
+      const [file, setFile] = useState(null);
       const [summary, setSummary] = useState('');
       const [tags, setTags] = useState('');
       const [busy, setBusy] = useState(false);
       const [error, setError] = useState('');
       const [drag, setDrag] = useState(false);
       const [done, setDone] = useState('');
-      const inputRef = React.useRef(null);
+      const inputRef = useRef(null);
       const MAX = 1024 * 1024;
 
       const pick = useCallback(async (f) => {
@@ -403,20 +469,448 @@ window.__ModuleLoader__.load({
       );
     }
 
+    // Folder upload: pick (webkitdirectory) or drop a folder, preview, then batch POST /upload.
+    const FOLDER_MAX = 2 * 1024 * 1024;
+    const SECRET_FILE = /(^|\/)\.env(\.|$)|\.(key|pem)$/i;
+
+    function readEntryFiles(entry, out) {
+      if (entry.isFile) {
+        return new Promise(res => entry.file(f => { out.push({ file: f, path: entry.fullPath.replace(/^\//, '') }); res(); }, () => res()));
+      }
+      if (!entry.isDirectory) return Promise.resolve();
+      const reader = entry.createReader();
+      return new Promise(res => {
+        const batch = () => reader.readEntries(async (list) => {
+          if (!list.length) { res(); return; }
+          for (const child of list) await readEntryFiles(child, out);
+          batch();
+        }, () => res());
+        batch();
+      });
+    }
+
+    function FolderUpload({ t, onUploaded, collectionId }) {
+      const [preview, setPreview] = useState(null); // { files: [{file,path,text}], bytes, skipped }
+      const [progress, setProgress] = useState(null); // { done, total, failed: [] }
+      const [drag, setDrag] = useState(false);
+      const ref = useRef(null);
+      useEffect(() => { ref.current?.setAttribute('webkitdirectory', ''); }, [preview, progress]);
+
+      const inspect = useCallback(async (list) => {
+        setProgress(null);
+        const files = []; let bytes = 0; let skipped = 0;
+        for (const { file, path } of list) {
+          if (file.size > FOLDER_MAX || SECRET_FILE.test(path)) { skipped++; continue; }
+          let text;
+          try { text = await file.text(); } catch { skipped++; continue; }
+          if (text.includes('\u0000') || !text.trim()) { skipped++; continue; }
+          files.push({ file, path, text: text.replace(/^\uFEFF/, '') }); bytes += file.size;
+        }
+        setPreview({ files, bytes, skipped });
+      }, []);
+
+      const onPick = (e) => {
+        const list = Array.from(e.target.files || []).map(f => ({ file: f, path: f.webkitRelativePath || f.name }));
+        e.target.value = '';
+        if (list.length) inspect(list);
+      };
+      const onDrop = async (e) => {
+        e.preventDefault(); setDrag(false);
+        const entries = Array.from(e.dataTransfer?.items || []).map(i => i.webkitGetAsEntry?.()).filter(Boolean);
+        const out = [];
+        for (const entry of entries) await readEntryFiles(entry, out);
+        if (out.length) inspect(out);
+      };
+
+      const upload = useCallback(async () => {
+        const files = preview.files;
+        const state = { done: 0, total: files.length, failed: [] };
+        setPreview(null); setProgress({ ...state });
+        for (const f of files) {
+          try {
+            await api('/upload', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ name: f.file.name, text: f.text, path: f.path, size: f.file.size,
+                mime: f.file.type || '', ...(collectionId ? { collectionId } : {}) }),
+            });
+            state.done++;
+          } catch (err) { state.failed.push(`${f.path}: ${err.message}`); }
+          setProgress({ ...state, failed: [...state.failed] });
+        }
+        onUploaded?.();
+      }, [preview, collectionId, onUploaded]);
+
+      const running = progress && progress.done + progress.failed.length < progress.total;
+      const brand = { ...S.btn, background: 'var(--dsw-alias-brand-primary)', color: '#fff', border: 'none' };
+      return h('div', { style: { marginBottom: 14 } },
+        preview
+          ? h('div', { style: { padding: 12, background: 'var(--dsw-alias-bg-layer-2)', borderRadius: 8 } },
+              h('div', { style: { fontSize: 13, fontWeight: 600 } }, '📁 ',
+                t('uploadFolderCount', { n: preview.files.length, kb: Math.max(1, Math.round(preview.bytes / 1024)) })),
+              preview.skipped ? h('div', { style: { ...S.muted, fontSize: 11, marginTop: 4 } }, t('uploadFolderSkipped', { n: preview.skipped })) : null,
+              h('div', { style: { display: 'flex', gap: 6, marginTop: 8 } },
+                h('button', { style: brand, disabled: !preview.files.length, onClick: upload }, t('uploadGo')),
+                h('button', { style: S.btn, onClick: () => setPreview(null) }, t('cancel')))
+            )
+          : h('div', {
+              onDragOver: (e) => { e.preventDefault(); setDrag(true); }, onDragLeave: () => setDrag(false), onDrop,
+              style: { padding: '12px', borderRadius: 8, textAlign: 'center',
+                border: `1px dashed ${drag ? 'var(--dsw-alias-brand-primary)' : 'var(--dsw-alias-border-l2)'}` },
+            },
+              h('button', { style: S.btn, disabled: running, onClick: () => ref.current?.click() }, '📁 ' + t('uploadFolder')),
+              h('span', { style: { fontSize: 12, ...S.muted, marginLeft: 8 } }, t('uploadFolderDrop')),
+              h('input', { ref, type: 'file', multiple: true, style: { display: 'none' }, onChange: onPick })
+            ),
+        progress ? h('div', { style: { marginTop: 8 } },
+          h('div', { style: { height: 4, borderRadius: 2, background: 'var(--dsw-alias-bg-layer-2)', overflow: 'hidden' } },
+            h('div', { style: { height: '100%', width: `${progress.total ? 100 * (progress.done + progress.failed.length) / progress.total : 100}%`,
+              background: 'var(--dsw-alias-brand-primary)' } })),
+          h('div', { style: { fontSize: 11, ...S.muted, marginTop: 4 } }, t('uploadFolderProgress', { done: progress.done, total: progress.total })),
+          progress.failed.map(msg => h('div', { key: msg, style: { fontSize: 11, color: 'var(--dsw-alias-state-error-primary)' } }, msg))
+        ) : null
+      );
+    }
+
+    function SharesPanel({ t }) {
+      const [collections, setCollections] = useState([]);
+      const [error, setError] = useState('');
+      const [loading, setLoading] = useState(true);
+      const [showForm, setShowForm] = useState(false);
+      const [kind, setKind] = useState('folder');
+      const [name, setName] = useState('');
+      const [path, setPath] = useState('');
+      const [visibility, setVisibility] = useState('private');
+      const [saving, setSaving] = useState(false);
+
+      const loadCollections = useCallback(async () => {
+        setLoading(true);
+        try {
+          const data = await api('/collections');
+          setCollections(data.collections || []);
+          setError('');
+        } catch (err) {
+          setError(err.message);
+        } finally {
+          setLoading(false);
+        }
+      }, []);
+
+      useEffect(() => {
+        loadCollections();
+      }, [loadCollections]);
+
+      const createCollection = useCallback(async () => {
+        if (!name.trim() || (kind !== 'upload' && !path.trim())) return;
+        setSaving(true);
+        try {
+          const body = { kind, name: name.trim(), visibility };
+          if (kind !== 'upload') body.root = path.trim();
+          await api('/collections', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          setShowForm(false);
+          setName(''); setPath(''); setKind('folder'); setVisibility('private');
+          loadCollections();
+        } catch (err) {
+          setError(err.message);
+        } finally {
+          setSaving(false);
+        }
+      }, [kind, name, path, visibility, loadCollections]);
+
+      const deleteCollection = useCallback(async (id) => {
+        if (!confirm(t('delete') + '?')) return;
+        try {
+          await api('/collections/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id }),
+          });
+          loadCollections();
+        } catch (err) {
+          setError(err.message);
+        }
+      }, [t, loadCollections]);
+
+      const toggleVisibility = useCallback(async (id, current) => {
+        try {
+          await api('/collections/update', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id, visibility: current === 'public' ? 'private' : 'public' }),
+          });
+          loadCollections();
+        } catch (err) {
+          setError(err.message);
+        }
+      }, [loadCollections]);
+
+      const resyncCollection = useCallback(async (id) => {
+        try {
+          await api('/collections/resync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id }),
+          });
+          loadCollections();
+        } catch (err) {
+          setError(err.message);
+        }
+      }, [loadCollections]);
+
+      const getSyncBadge = (sync) => {
+        if (!sync) return null;
+        const { state, done, total } = sync;
+        if (state === 'idle') return t('syncDone');
+        if (state === 'scanning') return t('syncScanning');
+        if (state === 'importing') return `${t('syncImporting')} ${t('syncProgress', { done, total })}`;
+        if (state === 'error') return t('syncError');
+        return null;
+      };
+
+      return h('div', { style: S.card },
+        h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 } },
+          h('h2', { style: { ...S.h2, margin: 0 } }, t('shares')),
+          h('button', {
+            style: S.btn, onClick: () => setShowForm(!showForm),
+          }, showForm ? t('cancel') : '➕ ' + t('newShare'))
+        ),
+
+        showForm && h('div', { style: { padding: 12, background: 'var(--dsw-alias-bg-layer-2)', borderRadius: 8, marginBottom: 12 } },
+          h('div', { style: { marginBottom: 10 } },
+            h('div', { style: { fontSize: 12, marginBottom: 4 } }, t('shareKind')),
+            h('div', { style: { display: 'flex', gap: 6 } },
+              h('button', {
+                type: 'button', disabled: saving,
+                onClick: () => setKind('folder'),
+                style: { ...S.btn, background: kind === 'folder' ? 'var(--dsw-alias-brand-primary)' : 'transparent',
+                  color: kind === 'folder' ? '#fff' : 'var(--dsw-alias-label-primary)', border: 'none' },
+              }, '📁 ' + t('shareFolder')),
+              h('button', {
+                type: 'button', disabled: saving,
+                onClick: () => setKind('project'),
+                style: { ...S.btn, background: kind === 'project' ? 'var(--dsw-alias-brand-primary)' : 'transparent',
+                  color: kind === 'project' ? '#fff' : 'var(--dsw-alias-label-primary)', border: 'none' },
+              }, '🗂️ ' + t('shareProject'))
+            )
+          ),
+          h('input', {
+            style: { ...S.input, width: '100%', boxSizing: 'border-box', marginBottom: 8 },
+            placeholder: t('shareFieldTitle') + ' / ' + t('shareKind'),
+            value: name, disabled: saving,
+            onChange: e => setName(e.target.value),
+          }),
+          h('input', {
+            style: { ...S.input, width: '100%', boxSizing: 'border-box', marginBottom: 8 },
+            placeholder: t('sharePathHint'),
+            value: path, disabled: saving,
+            onChange: e => setPath(e.target.value),
+          }),
+          h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 } },
+            h('label', { style: { display: 'flex', alignItems: 'center', gap: 4, fontSize: 12 } },
+              h('input', {
+                type: 'radio', name: 'vis', checked: visibility === 'private', disabled: saving,
+                onChange: () => setVisibility('private'),
+              }),
+              t('sharePrivateOpt')
+            ),
+            h('label', { style: { display: 'flex', alignItems: 'center', gap: 4, fontSize: 12 } },
+              h('input', {
+                type: 'radio', name: 'vis', checked: visibility === 'public', disabled: saving,
+                onChange: () => setVisibility('public'),
+              }),
+              t('sharePublicOpt')
+            )
+          ),
+          h('button', {
+            style: { ...S.btn, background: 'var(--dsw-alias-brand-primary)', color: '#fff', border: 'none', width: '100%' },
+            disabled: saving || !name.trim() || !path.trim(), onClick: createCollection,
+          }, saving ? t('saving') : t('shareCreate'))
+        ),
+
+        error && h('div', { style: { fontSize: 11.5, color: 'var(--dsw-alias-state-error-primary)', marginBottom: 8 } }, error),
+
+        loading
+          ? h('div', { style: { textAlign: 'center', padding: 20, ...S.muted } }, t('loading'))
+          : collections.length === 0
+            ? h('div', { style: { textAlign: 'center', padding: 20, ...S.muted } }, t('noKnowledge'))
+            : h('div', null, collections.map(col =>
+                h('div', { key: col.id, style: { padding: 10, background: 'var(--dsw-alias-bg-layer-2)', borderRadius: 8, marginBottom: 8 } },
+                  h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 } },
+                    h('span', { style: { fontSize: 14 } }, col.kind === 'folder' ? '📁' : col.kind === 'project' ? '🗂️' : '📋'),
+                    h('span', { style: { fontWeight: 600, fontSize: 12, flex: 1 } }, col.name, ' · ', col.stats?.items ?? 0),
+                    h('span', { style: { ...S.tag, color: 'var(--dsw-alias-state-idle-primary)' } }, col.visibility || 'private')
+                  ),
+                  col.sync && h('div', { style: { fontSize: 11, ...S.muted, marginBottom: 6 } },
+                    getSyncBadge(col.sync)
+                  ),
+                  h('div', { style: { display: 'flex', gap: 4 } },
+                    col.sync && h('button', { style: S.btnSmall, onClick: () => resyncCollection(col.id) }, t('shareResync')),
+                    h('button', {
+                      style: S.btnSmall,
+                      onClick: () => toggleVisibility(col.id, col.visibility),
+                    }, col.visibility === 'public' ? '🔒 ' + t('makePrivate') : '🔓 ' + t('makePublic')),
+                    h('button', { style: S.btnDanger, onClick: () => deleteCollection(col.id) }, t('shareDelete'))
+                  )
+                )
+              ))
+      );
+    }
+
+    // Items of one collection: pages of 50 from /items, rendered through a 20-row window.
+    const ROW_H = 44;
+    const WINDOW = 20;
+
+    function itemTitle(item) {
+      return item.title || item.summary || item.path || item.name || item.id;
+    }
+
+    function CollectionItems({ t, fishId, colId, filter, myId, reloadKey, onDelete, onToggleVisibility }) {
+      const [list, setList] = useState({ items: [], cursor: null, done: false, busy: false, error: '' });
+      const [start, setStart] = useState(0);
+      const busyRef = useRef(false);
+      const type = filter === 'conversations' ? 'conversation' : '';
+
+      const loadPage = useCallback(async (cursor, reset) => {
+        if (busyRef.current) return;
+        busyRef.current = true;
+        setList(p => ({ ...p, busy: true }));
+        try {
+          const q = new URLSearchParams({ fish: fishId, collection: colId, limit: '50' });
+          if (type) q.set('type', type);
+          if (cursor) q.set('cursor', cursor);
+          const r = await api('/items?' + q.toString());
+          setList(p => ({ items: (reset ? [] : p.items).concat(r.items || []), cursor: r.nextCursor || null,
+            done: !r.nextCursor, busy: false, error: '' }));
+        } catch (err) {
+          setList(p => ({ ...p, busy: false, error: err.message }));
+        } finally { busyRef.current = false; }
+      }, [fishId, colId, type]);
+
+      useEffect(() => { setStart(0); loadPage(null, true); }, [loadPage, reloadKey]);
+
+      const shown = filter === 'files' ? list.items.filter(i => i.type !== 'conversation') : list.items;
+      const onScroll = (e) => {
+        const el = e.currentTarget;
+        setStart(Math.max(0, Math.floor(el.scrollTop / ROW_H) - 2));
+        if (!list.done && el.scrollTop + el.clientHeight > el.scrollHeight - ROW_H * 3) loadPage(list.cursor, false);
+      };
+      const end = Math.min(shown.length, start + WINDOW);
+
+      const row = (item) => {
+        const ref = `@${item.author}/${item.type}/${item.id}`;
+        const mine = item.authorId === myId && !item.remote;
+        return h('div', { key: item.id, style: { height: ROW_H, boxSizing: 'border-box', padding: '4px 8px', display: 'flex',
+          alignItems: 'center', gap: 6, borderBottom: '1px solid var(--dsw-alias-border-l1)' } },
+          h('span', { style: { flexShrink: 0 } }, item.type === 'conversation' ? '💬' : item.type === 'file' ? '📎' : '📄'),
+          h('div', { style: { flex: 1, minWidth: 0, cursor: 'pointer' }, title: t('refHint') + ref, onClick: () => copyText(ref) },
+            h('div', { style: { fontSize: 12, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, itemTitle(item)),
+            h('div', { style: { fontSize: 10.5, ...S.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+              item.author, item.messageCount ? ` · ${item.messageCount} msgs` : '', item.path ? ` · ${item.path}` : '')),
+          (item.effectivePublic === false || item.isPublic === false) &&
+            h('span', { style: { ...S.tag, color: 'var(--dsw-alias-state-warn-primary)' } }, t('private')),
+          mine && h('button', { style: S.btnSmall, title: item.isPublic ? t('makePrivate') : t('makePublic'),
+            onClick: () => onToggleVisibility(item.id, item.isPublic === false) }, item.isPublic === false ? '🔓' : '🔒'),
+          mine && h('button', { style: S.btnDanger, title: t('delete'), onClick: () => onDelete(item.id) }, '🗑'));
+      };
+
+      if (list.error) return h('div', { style: { fontSize: 11.5, color: 'var(--dsw-alias-state-error-primary)', padding: 6 } }, list.error);
+      if (!shown.length) return h('div', { style: { ...S.muted, padding: 8 } }, list.busy ? t('loading') : t('noKnowledge'));
+      return h('div', { onScroll, style: { maxHeight: ROW_H * 8, overflowY: 'auto', marginBottom: 6,
+        background: 'var(--dsw-alias-bg-base)', borderRadius: 6 } },
+        h('div', { style: { height: start * ROW_H } }),
+        shown.slice(start, end).map(row),
+        h('div', { style: { height: (shown.length - end) * ROW_H } }),
+        list.busy ? h('div', { style: { ...S.muted, padding: 6, textAlign: 'center' } }, t('loading')) : null);
+    }
+
+
+    function LibraryPanel({ t, filter, myId, onDelete, onToggleVisibility }) {
+      const [state] = useLibrary();
+      const [collapsedFish, setCollapsedFish] = useState(new Set());
+      const [collapsedCol, setCollapsedCol] = useState(new Set());
+      const [reload, setReload] = useState(0);
+      const seen = useRef(new Set());
+
+      useEffect(() => {
+        const addFish = []; const addCol = [];
+        for (const fish of state.groups) {
+          const fk = 'f:' + fish.id;
+          if (!seen.current.has(fk)) { seen.current.add(fk); if (!fish.self) addFish.push(fish.id); }
+          for (const col of fish.collections || []) {
+            const ck = 'c:' + fish.id + '/' + col.id;
+            if (!seen.current.has(ck)) { seen.current.add(ck); addCol.push(fish.id + '/' + col.id); }
+          }
+        }
+        if (addFish.length) setCollapsedFish(prev => new Set([...prev, ...addFish]));
+        if (addCol.length) setCollapsedCol(prev => new Set([...prev, ...addCol]));
+      }, [state.groups]);
+
+      const toggle = (setter, id) => setter(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s; });
+      const fishShut = (fish) => collapsedFish.has(fish.id) || (!fish.self && !seen.current.has('f:' + fish.id));
+      const colShut = (key) => collapsedCol.has(key) || !seen.current.has('c:' + key);
+      const KIND_ICON = { folder: '📁', project: '🗂️', upload: '📋', manual: '📄' };
+
+      if (state.loading) return h('div', { style: { ...S.muted, textAlign: 'center', padding: 16 } }, t('loading'));
+      if (state.error && !state.groups.length) return h('div', { style: { fontSize: 11.5, color: 'var(--dsw-alias-state-error-primary)', padding: 8 } }, t('loadFailed', { e: state.error }));
+      if (!state.groups.length) return h('div', { style: { padding: 20, textAlign: 'center', ...S.muted } }, t('noKnowledge'));
+
+      // Run the Panel's handler (it confirms and calls the API), then reload the open lists.
+      const after = (fn) => async (...args) => { await fn(...args); setReload(c => c + 1); };
+      const del = after(onDelete);
+      const vis = after(onToggleVisibility);
+
+      return h('div', null, state.groups.map(fish =>
+        h('div', { key: fish.id, style: { marginBottom: 16 } },
+          h('div', {
+            style: { padding: '8px 10px', background: 'var(--dsw-alias-bg-layer-2)', borderRadius: 8, cursor: 'pointer',
+              display: 'flex', alignItems: 'center', gap: 8 },
+            onClick: () => toggle(setCollapsedFish, fish.id),
+          },
+            h('span', null, fishShut(fish) ? '▶' : '▼'),
+            h('span', { style: { fontSize: 13, fontWeight: 600, flex: 1 } }, '🐟 ', fish.name,
+              fish.self ? h('span', { style: S.muted }, ' (', t('you'), ')') : null, ' · ', fish.itemCount, ' ', t('entries')),
+            h('span', { style: { ...S.tag, color: fish.online || fish.self ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-idle-primary)' } },
+              fish.online || fish.self ? t('online') : t('offline'))
+          ),
+          !fishShut(fish) && h('div', { style: { marginTop: 8, marginLeft: 8 } },
+            fish.collections && fish.collections.map(col =>
+              h('div', { key: col.id, style: { marginBottom: 10 } },
+                h('div', {
+                  style: { padding: '6px 8px', background: 'var(--dsw-alias-bg-base)', borderRadius: 6, cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, marginBottom: 4 },
+                  onClick: () => toggle(setCollapsedCol, fish.id + '/' + col.id),
+                },
+                  h('span', null, colShut(fish.id + '/' + col.id) ? '▶' : '▼'),
+                  h('span', { style: { fontSize: 11, flex: 1 } }, KIND_ICON[col.kind] || '📁', ' ', col.name, ' · ', col.itemCount, ' ', t('entries')),
+                  col.kind !== 'manual' && col.visibility !== 'public' && h('span', { style: { ...S.tag, fontSize: 10 } }, t('private'))
+                ),
+                !colShut(fish.id + '/' + col.id) && h(CollectionItems, {
+                  t, fishId: fish.id, colId: col.id, filter, myId, reloadKey: reload,
+                  onDelete: del, onToggleVisibility: vis,
+                })
+              )
+            )
+          )
+        )
+      ));
+    }
+
     function Panel({ t }) {
       const [{ status, entries, error }, refresh, setState] = useSchool();
       const [edit, setEdit] = useState(false);
       const [draft, setDraft] = useState('');
       const [saving, setSaving] = useState(false);
-      const [tab, setTab] = useState('all');
+      const [tab, setTab] = useState('library');
+      const [filter, setFilter] = useState('all');
       const [adding, setAdding] = useState(false);
       const [addAddr, setAddAddr] = useState('');
       const [peerBusy, setPeerBusy] = useState(false);
       const [peerNote, setPeerNote] = useState('');
       const [update, setUpdate] = useState({ busy: false, data: null });
 
-      // Ask the host for current vs latest version. The host caches it; `refresh`
-      // forces a re-check when the user clicks the button.
       const checkUpdate = useCallback(async (force) => {
         setUpdate(prev => ({ ...prev, busy: true }));
         try {
@@ -503,16 +997,13 @@ window.__ModuleLoader__.load({
       if (!status) return h('div', { style: S.page }, error ? t('loadFailed', { e: error }) : t('loading'));
 
       const myId = status.me.id;
-      const filtered = tab === 'all' ? entries : entries.filter(e => e.type === (tab === 'files' ? 'knowledge' : 'conversation'));
 
       return h('div', { style: S.page },
-        // Header
         h('div', { style: { marginBottom: 24 } },
           h('h1', { style: { fontSize: 22, fontWeight: 600, margin: '0 0 4px' } }, '🐟 ', t('title')),
           h('div', { style: { fontSize: 13, ...S.muted } }, t('subtitle'))
         ),
 
-        // My fish card
         h('div', { style: S.card },
           h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 } },
             h('h2', { style: S.h2 }, t('me')),
@@ -559,13 +1050,9 @@ window.__ModuleLoader__.load({
           h(VersionNotice, { t, status, update, onCheck: () => checkUpdate(true) })
         ),
 
-        // Knowledge library card
         h('div', { style: S.card },
-          h('h2', { style: S.h2 }, t('knowledge')),
-          h(UploadCard, { t, onUploaded: refresh }),
-          // Tab bar
           h('div', { style: { display: 'flex', gap: 6, marginBottom: 12 } },
-            [['all', t('tabAll')], ['files', '📄 ' + t('tabFiles')], ['conversations', '💬 ' + t('tabConv')]].map(([id, label]) =>
+            [['library', t('knowledge')], ['shares', t('shares')], ['peers', t('peers')]].map(([id, label]) =>
               h('button', {
                 key: id, onClick: () => setTab(id),
                 style: { ...S.btn,
@@ -576,76 +1063,93 @@ window.__ModuleLoader__.load({
               }, label)
             )
           ),
-          filtered.length
-            ? filtered.map(e => h(EntryCard, { key: e.id, e, myId, t, onDelete: handleDelete, onToggleVisibility: handleToggleVisibility }))
-            : h('div', { style: { padding: 20, textAlign: 'center', ...S.muted } }, t('noKnowledge'))
-        ),
 
-        // Peers card
-        h('div', { style: S.card },
-          h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, gap: 8 } },
-            h('h2', { style: { ...S.h2, margin: 0 } }, t('peers'), ' (', status.peers.length, ')'),
-            h('div', { style: { display: 'flex', gap: 6, flexShrink: 0 } },
-              h('button', { style: S.btn, disabled: peerBusy, onClick: scanLan },
-                peerBusy ? t('peerScanning') : t('peerScan')),
-              h('button', {
-                style: S.btn, disabled: peerBusy,
-                onClick: () => { setAdding(v => !v); setPeerNote(''); },
-              }, t('peerAdd'))
-            )
-          ),
-
-          adding ? h('div', { style: { display: 'flex', gap: 6, marginBottom: 10 } },
-            h('input', {
-              style: S.input, value: addAddr, autoFocus: true, placeholder: t('peerAddrHint'),
-              onChange: e => setAddAddr(e.target.value),
-              onKeyDown: e => {
-                if (e.key === 'Enter') addPeer();
-                if (e.key === 'Escape') setAdding(false);
-              },
-            }),
-            h('button', {
-              style: { ...S.btn, background: 'var(--dsw-alias-brand-primary)', color: '#fff', border: 'none' },
-              disabled: peerBusy || !addAddr.trim(), onClick: addPeer,
-            }, t('save')),
-            h('button', { style: S.btn, onClick: () => setAdding(false) }, t('cancel'))
-          ) : null,
-
-          peerNote
-            ? h('div', { style: { fontSize: 11.5, ...S.muted, marginBottom: 8 } }, peerNote)
-            : null,
-
-          status.peers.length
-            ? h('div', null, status.peers.map(peer =>
-                h('div', { key: peer.id, style: { display: 'flex', alignItems: 'center', gap: 10, padding: 8, background: 'var(--dsw-alias-bg-layer-2)', borderRadius: 8, marginBottom: 8 } },
-                  h('div', {
-                    style: {
-                      width: 32, height: 32, borderRadius: '50%', display: 'flex', alignItems: 'center',
-                      justifyContent: 'center', fontSize: 16,
-                      background: peer.online === false ? 'var(--dsw-alias-state-idle-primary)' : 'var(--dsw-alias-state-success-primary)',
-                    },
-                  }, '🐟'),
-                  h('div', { style: { flex: 1, minWidth: 0 } },
-                    h('div', { style: { fontWeight: 600, fontSize: 13 } }, peer.name),
-                    h('div', { style: { fontSize: 11, ...S.muted } },
-                      peer.address, ':', peer.port, peer.source ? ` · ${peer.source}` : '')
+          tab === 'library'
+            ? h('div', null,
+                h(UploadCard, { t, onUploaded: refresh }),
+                h(FolderUpload, { t, onUploaded: refresh }),
+                h('div', { style: { display: 'flex', gap: 6, marginBottom: 12 } },
+                  [['all', t('tabAll')], ['files', '📄 ' + t('tabFiles')], ['conversations', '💬 ' + t('tabConv')]].map(([id, label]) =>
+                    h('button', {
+                      key: id, onClick: () => setFilter(id),
+                      style: { ...S.btn, fontSize: 11,
+                        background: filter === id ? 'var(--dsw-alias-brand-primary)' : 'transparent',
+                        color: filter === id ? '#fff' : 'var(--dsw-alias-label-primary)',
+                        border: filter === id ? 'none' : '1px solid var(--dsw-alias-border-l2)',
+                      },
+                    }, label)
+                  )
+                ),
+                h(LibraryPanel, { t, filter, myId, onDelete: handleDelete, onToggleVisibility: handleToggleVisibility })
+              )
+            : tab === 'shares'
+              ? h('div', null,
+                  h(FolderUpload, { t, onUploaded: refresh }),
+                  h(SharesPanel, { t }))
+              : h('div', null,
+                  h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, gap: 8 } },
+                    h('h2', { style: { ...S.h2, margin: 0 } }, t('peers'), ' (', status.peers.length, ')'),
+                    h('div', { style: { display: 'flex', gap: 6, flexShrink: 0 } },
+                      h('button', { style: S.btn, disabled: peerBusy, onClick: scanLan },
+                        peerBusy ? t('peerScanning') : t('peerScan')),
+                      h('button', {
+                        style: S.btn, disabled: peerBusy,
+                        onClick: () => { setAdding(v => !v); setPeerNote(''); },
+                      }, t('peerAdd'))
+                    )
                   ),
-                  h('button', {
-                    style: S.btnSmall, disabled: peerBusy,
-                    onClick: () => removePeer(peer.address),
-                  }, t('peerRemove'))
+
+                  adding ? h('div', { style: { display: 'flex', gap: 6, marginBottom: 10 } },
+                    h('input', {
+                      style: S.input, value: addAddr, autoFocus: true, placeholder: t('peerAddrHint'),
+                      onChange: e => setAddAddr(e.target.value),
+                      onKeyDown: e => {
+                        if (e.key === 'Enter') addPeer();
+                        if (e.key === 'Escape') setAdding(false);
+                      },
+                    }),
+                    h('button', {
+                      style: { ...S.btn, background: 'var(--dsw-alias-brand-primary)', color: '#fff', border: 'none' },
+                      disabled: peerBusy || !addAddr.trim(), onClick: addPeer,
+                    }, t('save')),
+                    h('button', { style: S.btn, onClick: () => setAdding(false) }, t('cancel'))
+                  ) : null,
+
+                  peerNote
+                    ? h('div', { style: { fontSize: 11.5, ...S.muted, marginBottom: 8 } }, peerNote)
+                    : null,
+
+                  status.peers.length
+                    ? h('div', null, status.peers.map(peer =>
+                        h('div', { key: peer.id, style: { display: 'flex', alignItems: 'center', gap: 10, padding: 8, background: 'var(--dsw-alias-bg-layer-2)', borderRadius: 8, marginBottom: 8 } },
+                          h('div', {
+                            style: {
+                              width: 32, height: 32, borderRadius: '50%', display: 'flex', alignItems: 'center',
+                              justifyContent: 'center', fontSize: 16,
+                              background: peer.online === false ? 'var(--dsw-alias-state-idle-primary)' : 'var(--dsw-alias-state-success-primary)',
+                            },
+                          }, '🐟'),
+                          h('div', { style: { flex: 1, minWidth: 0 } },
+                            h('div', { style: { fontWeight: 600, fontSize: 13 } }, peer.name),
+                            h('div', { style: { fontSize: 11, ...S.muted } },
+                              peer.address, ':', peer.port, peer.source ? ` · ${peer.source}` : '')
+                          ),
+                          h('button', {
+                            style: S.btnSmall, disabled: peerBusy,
+                            onClick: () => removePeer(peer.address),
+                          }, t('peerRemove'))
+                        )
+                      ))
+                    : h('div', { style: { padding: 20, textAlign: 'center', ...S.muted } }, t('noPeers'))
                 )
-              ))
-            : h('div', { style: { padding: 20, textAlign: 'center', ...S.muted } }, t('noPeers'))
         )
       );
     }
 
-    // Composer control: reference an entry, summarize-and-publish, or share this conversation.
     function FishComposerButton({ inputActions, sessionId, t }) {
       const [open, setOpen] = useState(false);
-      const [mode, setMode] = useState('menu'); // menu | pick | share
-      const [data, setData] = useState({ status: null, entries: [] });
+      const [mode, setMode] = useState('menu'); // menu | pick | share | search
+      const [data, setData] = useState({ status: null, entries: [], fish: [] });
       const [scope, setScope] = useState('all');
       const [note, setNote] = useState('');
       const [busy, setBusy] = useState(false);
@@ -653,14 +1157,54 @@ window.__ModuleLoader__.load({
       const [shareTags, setShareTags] = useState('');
       const [sharePublic, setSharePublic] = useState(true);
       const [sharing, setSharing] = useState(false);
-      const wrap = React.useRef(null);
+      const [searchText, setSearchText] = useState('');
+      const [searchResults, setSearchResults] = useState([]);
+      const [recentRefs, setRecentRefs] = useState([]);
+      const [currentFish, setCurrentFish] = useState(null);
+      const [currentColl, setCurrentColl] = useState(null);
+      const [collItems, setCollItems] = useState([]);
+      const wrap = useRef(null);
+
+      useEffect(() => {
+        const stored = localStorage.getItem('fish-school-recent-refs');
+        if (stored) {
+          try {
+            setRecentRefs(JSON.parse(stored).slice(0, 5));
+          } catch {}
+        }
+      }, []);
+
+      const addRecentRef = (ref) => {
+        const recent = [ref, ...recentRefs.filter(r => r !== ref)].slice(0, 5);
+        setRecentRefs(recent);
+        localStorage.setItem('fish-school-recent-refs', JSON.stringify(recent));
+      };
 
       const load = useCallback(async () => {
         setBusy(true);
         try {
-          const [status, knowledge] = await Promise.all([api('/status'), api('/knowledge?limit=100')]);
-          setData({ status, entries: knowledge.entries || [] });
+          const [status, library] = await Promise.all([
+            api('/status'),
+            api('/library')
+          ]);
+          setData({ status, entries: [], fish: library.fish || [] });
           setNote('');
+        } catch (err) {
+          setNote(err.message);
+        } finally {
+          setBusy(false);
+        }
+      }, []);
+
+      const search = useCallback(async (text) => {
+        if (text.length < 2) {
+          setSearchResults([]);
+          return;
+        }
+        setBusy(true);
+        try {
+          const result = await api('/items?q=' + encodeURIComponent(text) + '&limit=20');
+          setSearchResults(result.items || []);
         } catch (err) {
           setNote(err.message);
         } finally {
@@ -678,8 +1222,18 @@ window.__ModuleLoader__.load({
         return () => document.removeEventListener('mousedown', onDown);
       }, [open, load]);
 
+      const loadColl = useCallback(async (fish, col) => {
+        try {
+          const res = await api('/items?fish=' + fish.id + '&collection=' + col.id + '&limit=50');
+          setCollItems(res.items || []);
+        } catch (err) {
+          setNote(err.message);
+        }
+      }, []);
+
       const insert = useCallback((entry) => {
         const token = `@${entry.author}/${entry.type}/${entry.id}`;
+        addRecentRef(token);
         try {
           const span = inputActions?.captureInsertion?.();
           const result = inputActions?.insertText?.(token + ' ', span);
@@ -690,7 +1244,6 @@ window.__ModuleLoader__.load({
         }
       }, [inputActions, t]);
 
-      // Insert a ready-made prompt; the agent writes the summary and calls fish_school_publish.
       const doSummarize = useCallback(() => {
         try {
           const span = inputActions?.captureInsertion?.();
@@ -703,7 +1256,6 @@ window.__ModuleLoader__.load({
         }
       }, [inputActions, t]);
 
-      // Publish the current transcript directly, without an LLM round trip.
       const doShare = useCallback(async () => {
         if (!sessionId) return;
         setSharing(true); setNote('');
@@ -721,14 +1273,9 @@ window.__ModuleLoader__.load({
         } finally { setSharing(false); }
       }, [sessionId, shareTitle, shareTags, sharePublic]);
 
-      const me = data.status?.me?.name;
-      const peers = data.status?.peers || [];
-      const scopes = ['all', 'mine', ...peers.map(p => p.name)];
-      const entries = data.entries.filter(e => {
-        if (scope === 'all') return true;
-        if (scope === 'mine') return e.author === me;
-        return e.author === scope;
-      });
+      const fishList = currentFish
+        ? currentFish.collections || []
+        : data.fish || [];
 
       return h('div', { ref: wrap, style: { position: 'relative', display: 'inline-flex' } },
         h('button', {
@@ -766,6 +1313,10 @@ window.__ModuleLoader__.load({
                   onClick: () => {
                     if (key === 'sum') { doSummarize(); return; }
                     setNote('');
+                    setSearchText('');
+                    setCurrentFish(null);
+                    setCurrentColl(null);
+                    setSearchResults([]);
                     setMode(key);
                   },
                   style: {
@@ -823,42 +1374,107 @@ window.__ModuleLoader__.load({
                   )
                 )
               : h('div', null,
-                  h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 8 } },
-                    scopes.map(s => h('button', {
-                      key: s, type: 'button', onClick: () => setScope(s),
-                      style: {
-                        padding: '3px 8px', fontSize: 11, borderRadius: 999, cursor: 'pointer',
-                        border: '1px solid ' + (scope === s ? 'transparent' : 'var(--dsw-alias-border-l2)'),
-                        background: scope === s ? 'var(--dsw-alias-brand-primary)' : 'transparent',
-                        color: scope === s ? '#fff' : 'var(--dsw-alias-label-secondary)',
+                  h('div', { style: { marginBottom: 8 } },
+                    h('input', {
+                      type: 'text', autoFocus: true,
+                      style: { ...S.input, width: '100%', boxSizing: 'border-box' },
+                      placeholder: t('refSearchPlaceholder'),
+                      value: searchText,
+                      onChange: e => {
+                        setSearchText(e.target.value);
+                        search(e.target.value);
                       },
-                    }, s === 'all' ? t('refAll') : s === 'mine' ? t('refMine') : s))
+                    })
                   ),
 
-                  busy
-                    ? h('div', { style: { padding: 16, textAlign: 'center', fontSize: 12, color: 'var(--dsw-alias-label-secondary)' } }, t('loading'))
-                    : entries.length === 0
-                      ? h('div', { style: { padding: 16, textAlign: 'center', fontSize: 12, color: 'var(--dsw-alias-label-secondary)' } }, t('refEmpty'))
-                      : h('div', null, entries.map(e => h('button', {
-                          key: e.id, type: 'button', onClick: () => insert(e),
-                          title: `@${e.author}/${e.type}/${e.id}`,
+                  currentFish && h('div', { style: { fontSize: 11, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 4 } },
+                    h('button', {
+                      style: { ...S.btnSmall, border: 'none', cursor: 'pointer', color: 'var(--dsw-alias-brand-primary)' },
+                      onClick: () => { setCurrentFish(null); setCurrentColl(null); }
+                    }, t('refBack')),
+                    '  ', currentFish.name
+                  ),
+
+                  currentColl && h('div', { style: { fontSize: 11, marginBottom: 8 } },
+                    `${t('browseFish')}: ${currentFish.name} / ${currentColl.name}`
+                  ),
+
+                  searchText.length >= 2 && searchResults.length > 0
+                    ? h('div', null, searchResults.slice(0, 15).map(item =>
+                        h('button', {
+                          key: item.id, type: 'button', onClick: () => insert(item),
                           style: {
-                            display: 'flex', alignItems: 'flex-start', gap: 8, width: '100%',
+                            display: 'flex', alignItems: 'flex-start', gap: 6, width: '100%',
                             textAlign: 'left', padding: '7px 8px', marginBottom: 2,
                             background: 'transparent', border: 'none', borderRadius: 6,
-                            cursor: 'pointer', color: 'var(--dsw-alias-label-primary)',
+                            cursor: 'pointer', color: 'var(--dsw-alias-label-primary)', fontSize: 11,
                           },
                         },
-                          h('span', { style: { flexShrink: 0, fontSize: 13 } },
-                            e.type === 'conversation' ? '💬' : e.sourceFile ? '📎' : '📄'),
+                          h('span', { style: { flexShrink: 0 } },
+                            item.type === 'conversation' ? '💬' : '📄'),
                           h('span', { style: { minWidth: 0, flex: 1 } },
-                            h('div', {
-                              style: { fontSize: 12.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-                            }, e.type === 'knowledge' ? e.summary : e.title),
-                            h('div', { style: { fontSize: 10.5, color: 'var(--dsw-alias-label-secondary)' } },
-                              e.author, e.type === 'conversation' ? ` · ${e.messageCount ?? 0} msgs` : '')
+                            h('div', { style: { fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+                              item.type === 'conversation' ? item.title : item.summary),
+                            h('div', { style: { fontSize: 10, color: 'var(--dsw-alias-label-secondary)' } },
+                              item.peerName ? item.peerName : item.author)
                           )
-                        ))),
+                        )
+                      ))
+                    : !searchText && currentColl && collItems.length > 0
+                      ? h('div', null, collItems.slice(0, 15).map(item =>
+                          h('button', {
+                            key: item.id, type: 'button', onClick: () => insert(item),
+                            style: {
+                              display: 'flex', alignItems: 'flex-start', gap: 6, width: '100%',
+                              textAlign: 'left', padding: '7px 8px', marginBottom: 2,
+                              background: 'transparent', border: 'none', borderRadius: 6,
+                              cursor: 'pointer', color: 'var(--dsw-alias-label-primary)', fontSize: 11,
+                            },
+                          },
+                            h('span', { style: { flexShrink: 0 } }, item.type === 'conversation' ? '💬' : '📄'),
+                            h('span', { style: { minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+                              item.type === 'conversation' ? item.title : item.summary)
+                          )
+                        ))
+                    : !searchText && recentRefs.length > 0
+                      ? h('div', null,
+                          h('div', { style: { fontSize: 11, fontWeight: 500, marginBottom: 6, color: 'var(--dsw-alias-label-secondary)' } }, t('recentRefs')),
+                          recentRefs.map(ref => h('div', {
+                            key: ref, style: { fontSize: 10, padding: '4px 8px', marginBottom: 2, cursor: 'pointer',
+                              background: 'var(--dsw-alias-bg-layer-2)', borderRadius: 4 },
+                            onClick: () => {
+                              try {
+                                const span = inputActions?.captureInsertion?.();
+                                inputActions?.insertText?.(ref + ' ', span);
+                              } catch {}
+                            }
+                          }, ref))
+                        )
+                      : !searchText && !currentFish
+                        ? h('div', null,
+                            h('div', { style: { fontSize: 11, fontWeight: 500, marginBottom: 6, color: 'var(--dsw-alias-label-secondary)' } }, t('browseFish')),
+                            fishList.slice(0, 10).map(fish => h('button', {
+                              key: fish.id, type: 'button',
+                              onClick: () => setCurrentFish(fish),
+                              style: {
+                                width: '100%', textAlign: 'left', padding: '6px 8px', marginBottom: 2,
+                                background: 'transparent', border: 'none', borderRadius: 6,
+                                cursor: 'pointer', color: 'var(--dsw-alias-label-primary)', fontSize: 11,
+                              },
+                            }, '🐟 ', fish.name, ' · ', fish.itemCount))
+                          )
+                        : currentFish && !currentColl
+                          ? h('div', null, (currentFish.collections || []).slice(0, 10).map(col => h('button', {
+                              key: col.id, type: 'button',
+                              onClick: () => { setCurrentColl(col); loadColl(currentFish, col); },
+                              style: {
+                                width: '100%', textAlign: 'left', padding: '6px 8px', marginBottom: 2,
+                                background: 'transparent', border: 'none', borderRadius: 6,
+                                cursor: 'pointer', color: 'var(--dsw-alias-label-primary)', fontSize: 11,
+                              },
+                            }, '📁 ', col.name, ' · ', col.itemCount))
+                          )
+                          : null,
 
                   h('div', {
                     style: {
@@ -918,14 +1534,9 @@ window.__ModuleLoader__.load({
           )
         );
 
-        // The sidebar icon and its panel are registered as a pair and retracted as a
-        // pair. Selecting the panel while its row is gone would leave a blank page, so
-        // hiding also deselects it — the same thing the market does.
         let layout = null;
         ctx.inject?.(['layout'], (scoped) => { layout = scoped.layout; });
 
-        // Starts hidden and mounts only once the stored preference is known, so a
-        // user who turned the entry off never sees it flash on refresh.
         const sidebarGate = createGate(() => {
           const offRow = ctx.slots.register(
             { name: 'sidebar.panellist', id: NS, order: 15, label: () => t('title') },
@@ -958,7 +1569,6 @@ window.__ModuleLoader__.load({
             const settings = await api('/settings');
             applySidebar(settings.sidebarEnabled !== false);
           } catch (err) {
-            // A settings failure must not hide the plugin: fall back to showing it.
             console.warn('[fish-school] cannot read settings, showing the sidebar entry:', err.message);
             applySidebar(true);
           }
@@ -983,13 +1593,9 @@ window.__ModuleLoader__.load({
           }
         }
 
-        // Waits for the slot to exist before mounting anything; the wanted visibility
-        // from loadSettings() is already stored, so ordering does not matter.
         ctx.slots.inject('sidebar.panellist', () => sidebarGate.available());
         loadSettings();
 
-        // GET /status also carries sidebarEnabled, so a page that only has the settings
-        // card still shows the switch in the right position.
         function SettingsSection() {
           const [snap, setSnap] = useState(snapshot);
           const [status, setStatus] = useState({ version: null, updateRepo: null });
@@ -1031,3 +1637,4 @@ window.__ModuleLoader__.load({
     };
   },
 });
+

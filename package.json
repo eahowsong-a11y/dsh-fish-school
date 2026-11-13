@@ -1,6 +1,6 @@
 {
   "name": "@local/fish-school",
-  "version": "1.7.0",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
   "description": "鱼群插件：局域网内 DeepSeek Harness 实例的知识共享系统",
@@ -15,6 +15,10 @@
     "client.js",
     "lib/store.js",
     "lib/network.js",
+    "lib/session-reader.js",
+    "lib/folder-indexer.js",
+    "lib/project-sync.js",
+    "lib/updater.js",
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg"

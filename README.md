@@ -1,6 +1,6 @@
 # 🐟 鱼群（Fish School）
 
-局域网内多个 DeepSeek Harness 实例之间共享知识：把对话或资料发布到本机的「公共文件夹」，同一局域网里的其他鱼可以检索、引用，直接放进自己的对话上下文。
+局域网内多个 DeepSeek Harness 实例之间共享知识：把对话或资料发布到本机的「公共文件夹」，同一局域网里的其他鱼可以检索、引用，直接放进自己的对话上下文。**2.0 起支持自动共享本地文件夹与对话项目，面板按鱼分组折叠，引用选择器搜索优先，以及一键更新。**
 
 - 版本：以 `package.json` 为准（插件页顶部徽标与面板「我的鱼 → 版本」都读它，本文件不再硬编码）
 - 依赖：无第三方依赖，只用 Node.js 内置模块
@@ -239,6 +239,47 @@ New-NetFirewallRule -DisplayName "DSH Fish School TCP" -Direction Inbound -Proto
 **对方改了名字但我这边还是旧的**：名字随心跳广播，最多 15 秒刷新；面板每 5 秒拉一次状态。
 
 ## 变更记录
+
+**2.0.0** — 大规模重构：自动共享、分组折叠、一键更新
+
+**数据层**
+- 引入 Collection（共享单元）概念，支持 `manual`（手动）/ `upload`（文件夹上传）/ `folder`（自动监视本地文件夹）/ `project`（自动同步 DSH 对话项目）四种类型
+- Items 层与 Blobs 层分离：列表接口不再内联正文，正文通过 `/item/:id` 或 `/blob/:id` 按需拉取；条目数量大时响应体积下降 90%+
+- 全局 `rev` 计数器 + tombstone 记录删除，支持对端增量同步
+- 启动时维护内存索引，读路径不再 `readdir + readFileSync`
+- 向后兼容：旧版 `knowledge/*.json` / `conversations/*.json` 在启动时自动迁移，旧格式 token `@鱼/knowledge/<id>` 继续有效
+
+**协议**
+- `/hello` 新增 `schema: 2, caps: ['manifest','item','blob']`
+- 新增 `GET /manifest?since=<rev>` 增量元数据（items 不含正文，excerpt ≤ 160 字符）
+- 新增 `GET /item/:id`、`GET /blob/:id`（文件类条目原始字节）
+- 对旧版 peer 自动降级至 `/knowledge` 旧路径
+
+**面板功能**
+- 知识库改为按鱼 → 集合两级折叠展示，默认展开本机，远端折叠
+- 折叠状态持久化到 `localStorage`；支持文件/对话分类过滤
+- 新增「共享」标签页：管理本机集合（创建/删除/切换公开/重新扫描），显示同步进度
+- 文件上传支持「上传文件夹」（`webkitdirectory` + 拖拽递归）、批量进度、跳过二进制与大文件
+- 版本检查新增「⬇️ 一键更新」按钮：下载 release tgz → 验证 → 覆盖安装目录 → 修复 lockfile → 提示重启
+
+**引用选择器**
+- 改为「搜索优先 + 三层导航」：默认显示最近引用 + 鱼列表，输入 ≥ 2 字符即全库检索
+- 点击鱼 → 展示集合 → 点击集合 → 分页条目，面包屑返回，`↑↓←→` 键盘导航
+- 最近引用保存至 `localStorage`
+
+**自动共享文件夹（`kind: folder`）**
+- 创建集合时填入本地绝对路径，插件自动扫描并建立索引
+- `fs.watch(recursive)` 实时监听 + 30 秒兜底全量比对
+- 内置忽略规则：`.git/**` / `node_modules/**` / `*.env` / `*.key` / `*.pem` 等；支持 `.fishschoolignore`
+- 路径安全：`realpath` 验证在 root 内，拒绝 `..` / 符号链接越权 / NTFS 备用流
+- 集合默认**私有**，一键切公开
+
+**自动共享对话项目（`kind: project`）**
+- 创建集合时填入 workspace 根目录，自动扫描 `~/.dsh/sessions/` 下 `cwd` 以该目录开头的所有历史会话
+- 解码 DSH 多帧 zstd 格式会话文件（实测 902 帧），提取 user/assistant 消息
+- 每 60 秒轮询新会话；进行中的会话随轮次增长，对端可见最新
+- 历史全量导入 + 增量 upsert（同一 sessionId 多次 upsert 只更新 messageCount 和内容，id 稳定）
+- 集合默认**私有**，一键切公开
 
 **1.6.0** — 面板显示当前版本与可更新版本
 
