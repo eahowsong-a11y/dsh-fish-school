@@ -18,30 +18,58 @@ jobs:
           node --check index.js
           node --check lib/network.js
           node --check lib/store.js
-      - run: |
+      - name: Build tarball
+        run: |
+          set -euo pipefail
           VERSION=$(jq -r '.version' package.json)
+          TAG="${GITHUB_REF_NAME#v}"
+          echo "package.json=$VERSION  tag=$TAG"
+          if [ "$VERSION" != "$TAG" ]; then
+            echo "::error::tag v$TAG does not match package.json version $VERSION"
+            exit 1
+          fi
+          mkdir -p dist
           npm pack --pack-destination=dist/
-          mv dist/local-fish-school-*.tgz dist/fish-$VERSION.tgz
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
-      - uses: softprops/action-gh-release@v1
+          mv dist/local-fish-school-*.tgz "dist/fish-$VERSION.tgz"
+          ls -l dist/
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+      - name: Create release
+        uses: softprops/action-gh-release@v2
         with:
           files: dist/fish-*.tgz
           generate_release_notes: true
           body: |
             # Fish School v${{ env.VERSION }}
 
-            ## Update Instructions
+            ## Upgrade
 
-            ### Quick (Windows PowerShell)
+            No uninstall needed. Both paths below were tested on 1.4.0:
+
+            **Standard — requires a DSH restart**
             ```powershell
-            .\update-local.ps1
+            cd C:\harper\dsh-fish-school
+            .\update-local.ps1 -Version "${{ env.VERSION }}"
             ```
+            `pnpm install` replaces `node_modules\@local\fish-school`, so DSH answers
+            `restart-required (package-moved)`. Quit and reopen DSH; a page refresh
+            is not enough.
 
-            ### Manual
-            1. Download `fish-${{ env.VERSION }}.tgz`
-            2. Save to `C:\harper\fish.tgz`
-            3. Run: `cd $env:USERPROFILE\.dsh\profiles\desktop && pnpm install`
-            4. Refresh DSH (Ctrl+R)
+            **Hot — no restart**
+            ```powershell
+            .\update-local.ps1 -Version "${{ env.VERSION }}" -Hot
+            ```
+            Overwrites the files in place, then reload the plugin in
+            Settings → Plugins → fish-school.
+
+            **Manual**
+            1. Download `fish-${{ env.VERSION }}.tgz` and save it as `C:\harper\fish.tgz`
+            2. `cd $env:USERPROFILE\.dsh\profiles\desktop`
+            3. `pnpm install --no-frozen-lockfile`
+            4. Restart DSH
+
+            Knowledge and conversations live in
+            `%USERPROFILE%\.dsh\profiles\desktop\fish-school\` and are untouched by
+            an upgrade.
 
             ## What's New
             See commit log for details.
