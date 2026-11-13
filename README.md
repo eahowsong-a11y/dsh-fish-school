@@ -99,6 +99,49 @@ plugin_manager(action="install_bundle", target="@yourteam/fish-school@1.1.0", en
 `npm pack` 会生成 `local-fish-school-1.1.0.tgz`，适合用 IM 传给对方。对方用 `file:` 前缀作为安装 spec。
 （这条依赖 pnpm 对 `file:` 的处理，我没有实测过，优先用 A 或 B。）
 
+## 更新版本
+
+装过一次之后，升级**不需要先卸载**插件，只要让 `node_modules\@local\fish-school` 里的代码换成新的。下面两种方式都在 1.4.0 上实测过，区别是**要不要重启 DSH**：
+
+| 方式 | 做什么 | 生效条件 |
+|---|---|---|
+| 标准模式 `.\update-local.ps1` | 替换 `C:\harper\fish.tgz` → `pnpm install` | **必须重启 DSH** |
+| 热更新模式 `.\update-local.ps1 -Hot` | 把 tgz 里的文件原地覆盖进已安装目录 | 只重载插件，不用重启 |
+
+### 为什么标准模式要重启
+
+`pnpm install` 会重建 `node_modules\@local\fish-school` 这个目录。DSH 在启动时已经记下这个包的解析路径，目录一换，运行中的进程无法热替换，`set_bundle` 会返回：
+
+```json
+{"application":"restart-required","restartReason":"package-moved"}
+```
+
+这时候刷新页面没用，必须退出 DSH 再打开。**数据不受影响**：知识和对话存在 `%USERPROFILE%\.dsh\profiles\desktop\fish-school\`，跟插件代码分开。
+
+热更新模式原地覆盖、目录不变，所以可以走 `设置 → 插件 → fish-school` 关闭再打开来重载。
+
+### 发布新版本（维护者）
+
+```bash
+# 1. 改版本号（语义化版本）
+#    package.json 的 version
+#    lib/network.js 的 VERSION 常量（/hello 上报给其他鱼的就是它）
+
+# 2. 本地打包验证
+pwsh build-and-pack.ps1        # 产出 dist/fish-<version>.tgz
+
+# 3. 打 tag 推送，GitHub Actions 自动建 Release
+git tag v1.4.0
+git push origin v1.4.0
+```
+
+`.github/workflows/release.yml` 会在 tag 推送后跑语法检查、`npm pack`、重命名成 `fish-<version>.tgz` 并挂到 Release 上。
+
+### 已知环境问题
+
+- **DSH 面板里的插件安装/升级在这台机器上跑不通**：`.dsh` 的插件管理器调用的是它自己记录的 pnpm 路径，那个 store link 曾经是空的（已修复）；修好后仍会因为 `@deepseek-ai/dsh-type-meta` 在公司内网 registry 上 404 而失败。所以升级请用上面的脚本或手敲 `pnpm install`，不要指望设置面板里的"安装"按钮。
+- 脚本优先读 GitHub Release；没有 release 时自动回落到 `C:\harper\dsh-fish-school` 本地打包，所以没网也能自测。
+
 ## 装完怎么确认成功
 
 对方机器上：
