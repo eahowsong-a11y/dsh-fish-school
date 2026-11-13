@@ -204,6 +204,18 @@ New-NetFirewallRule -DisplayName "DSH Fish School TCP" -Direction Inbound -Proto
 
 **对方改了名字但我这边还是旧的**：名字随心跳广播，最多 15 秒刷新；面板每 5 秒拉一次状态。
 
+## 变更记录
+
+**1.5.0** — 面板知识库合并远端条目
+
+面板的 `/fish-school/v1/knowledge` 之前只调 `store.search()`，因此侧栏 🐟 的「知识库」永远只显示本机发布过的条目，别人共享的内容只能通过 Agent 工具（`fish_school_list` / `fish_school_query`）读到。现在该接口会同时调用 `network.searchPeers()` 合并全网的公开条目：
+
+- 远端条目带 `remote: true`、`peerName`、`peerAddress`，面板显示「远程 · 鱼名」标签；
+- 远端条目只读：删除和公开/私有开关只对自己的条目出现（沿用 `isMine` 判断）；
+- 远端结果缓存 8 秒，避免面板每 5 秒轮询时反复探测离线鱼（单次超时 3 秒）；
+- 私有对话仍然只在本人面板可见：对外的 `/knowledge` 接口一直不含私有条目，本次未改动该行为；
+- 同一 id 被多条鱼报告时，本机条目优先。
+
 ## 许可
 
 内部使用，未授权对外分发。

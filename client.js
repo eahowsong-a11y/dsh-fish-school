@@ -19,6 +19,7 @@ window.__ModuleLoader__.load({
         tabAll: 'All', tabFiles: 'Files', tabConv: 'Conversations',
         port: 'Port', entries: 'Entries', online: 'Online',
         delete: 'Delete', makePublic: 'Make public', makePrivate: 'Make private', private: 'Private',
+        remote: 'Remote',
         loading: 'Loading…', loadFailed: 'Cannot reach Fish school: {e}',
         refHint: 'Reference: ',
         ref: 'Reference a fish or its knowledge', refAll: 'All fish', refMine: 'Mine',
@@ -48,6 +49,7 @@ window.__ModuleLoader__.load({
         tabAll: '全部', tabFiles: '文件', tabConv: '对话',
         port: '端口', entries: '条目', online: '在线',
         delete: '删除', makePublic: '公开', makePrivate: '设为私有', private: '私有',
+        remote: '远程',
         loading: '加载中…', loadFailed: '无法连接鱼群服务：{e}',
         refHint: '引用：',
         ref: '引用某条鱼及其知识', refAll: '全部鱼', refMine: '我的',
@@ -142,6 +144,10 @@ window.__ModuleLoader__.load({
             }, isConv ? e.title : e.summary),
             h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' } },
               e.tags?.map(tag => h('span', { key: tag, style: S.tag }, tag)),
+              e.remote && h('span', {
+                style: { ...S.tag, color: 'var(--dsw-alias-state-success-primary)' },
+                title: e.peerAddress ?? '',
+              }, `${t('remote')} · ${e.peerName ?? e.author}`),
               !e.isPublic && h('span', { style: { ...S.tag, color: 'var(--dsw-alias-state-warn-primary)' } }, t('private'))
             ),
             h('div', { style: { fontSize: 11, ...S.muted, marginTop: 4 } },
