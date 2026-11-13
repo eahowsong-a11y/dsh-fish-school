@@ -32,6 +32,11 @@ function toolDef(name, description, params, execute) {
         for (const it of items ?? []) {
           if (!it) continue;
           if (it.ok === false) { lines.push(`- ${it.ref ?? '?'}: ${it.error ?? 'failed'}`); continue; }
+          // Special handling for conversation messages (role + text), not knowledge items
+          if (it.role && typeof it.text === 'string') {
+            lines.push(`\n[${it.role}] ${it.text.length > 2000 ? `${it.text.slice(0, 2000)}…` : it.text}`);
+            continue;
+          }
           const title = it.title ?? it.summary ?? '(untitled)';
           const head = [
             it.type ? `[${it.type}]` : '',
@@ -465,7 +470,7 @@ export function apply(ctx, config = {}) {
       },
       async ({ conversationId, fishName }) => {
         // Try local first
-        if (!fishName) {
+        if (!fishName || fishName === store.identity().name) {
           const conv = store.getConversation(conversationId);
           if (conv) {
             return {
@@ -481,13 +486,8 @@ export function apply(ctx, config = {}) {
           }
         }
 
-        // Try specific peer by name
-        const peerName = fishName ?? undefined;
-        const targetPeers = peerName
-          ? [network.findPeer(peerName)].filter(Boolean)
-          : network.listPeers();
-
-        for (const peer of targetPeers) {
+        // Ask the named peer first, then the rest: the name may be stale after a rename.
+        for (const peer of network.peersFor(fishName)) {
           const entry = await network.getFromPeer(peer, conversationId);
           if (entry) {
             return {
@@ -565,10 +565,7 @@ export function apply(ctx, config = {}) {
           }
 
           if (!entry) {
-            const candidates = owner
-              ? [network.findPeer(owner)].filter(Boolean)
-              : network.listPeers();
-            for (const peer of candidates) {
+            for (const peer of network.peersFor(owner)) {
               const found = await network.getFromPeer(peer, id);
               if (found) { entry = found; source = peer.name; break; }
             }
