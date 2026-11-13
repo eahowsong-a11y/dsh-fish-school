@@ -1,45 +1,114 @@
+# Release pipeline.
+#
+# Two entry points:
+#   1. push to main  -> if package.json's version has no release yet, create its tag and publish
+#   2. push a v* tag -> publish that tag (the tag must match package.json's version)
+#
+# Tagging and publishing live in the same run on purpose: a tag pushed with
+# GITHUB_TOKEN does not trigger other workflows, so a separate "auto-tag" workflow
+# could never hand off to a tag-triggered release.
+
 name: Release
 
 on:
   push:
+    branches: [main]
     tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.repository }}
+  cancel-in-progress: false
 
 jobs:
-  build:
+  prepare:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    outputs:
+      version: ${{ steps.decide.outputs.version }}
+      should_release: ${{ steps.decide.outputs.should_release }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Decide whether to tag and release
+        id: decide
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION=$(jq -r '.version' package.json)
+          TAG="v$VERSION"
+          echo "package.json=$VERSION  ref_type=$GITHUB_REF_TYPE  ref=$GITHUB_REF_NAME"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$GITHUB_REF_NAME" != "$TAG" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match package.json version $VERSION"
+            exit 1
+          fi
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "$TAG already has a release; nothing to do"
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "should_release=true" >> "$GITHUB_OUTPUT"
+
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "tag $TAG already exists, only its release is missing"
+            exit 0
+          fi
+
+          if [ "$GITHUB_REF_TYPE" != "branch" ]; then
+            echo "::error::triggered by a tag, but $TAG is not on origin"
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "release $TAG"
+          git push origin "refs/tags/$TAG"
+          echo "created $TAG at $(git rev-parse --short HEAD)"
+
+  release:
+    needs: prepare
+    if: needs.prepare.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - run: |
+
+      - name: Syntax check
+        run: |
           node --check index.js
           node --check lib/network.js
           node --check lib/store.js
+
       - name: Build tarball
         run: |
           set -euo pipefail
           VERSION=$(jq -r '.version' package.json)
-          TAG="${GITHUB_REF_NAME#v}"
-          echo "package.json=$VERSION  tag=$TAG"
-          if [ "$VERSION" != "$TAG" ]; then
-            echo "::error::tag v$TAG does not match package.json version $VERSION"
-            exit 1
-          fi
+          test "$VERSION" = "${{ needs.prepare.outputs.version }}"
           mkdir -p dist
           npm pack --pack-destination=dist/
           mv dist/local-fish-school-*.tgz "dist/fish-$VERSION.tgz"
           ls -l dist/
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ needs.prepare.outputs.version }}
           files: dist/fish-*.tgz
           generate_release_notes: true
           body: |
-            # Fish School v${{ env.VERSION }}
+            # Fish School v${{ needs.prepare.outputs.version }}
 
             ## Upgrade
 
@@ -48,7 +117,7 @@ jobs:
             **Standard — requires a DSH restart**
             ```powershell
             cd C:\harper\dsh-fish-school
-            .\update-local.ps1 -Version "${{ env.VERSION }}"
+            .\update-local.ps1 -Version "${{ needs.prepare.outputs.version }}"
             ```
             `pnpm install` replaces `node_modules\@local\fish-school`, so DSH answers
             `restart-required (package-moved)`. Quit and reopen DSH; a page refresh
@@ -56,13 +125,14 @@ jobs:
 
             **Hot — no restart**
             ```powershell
-            .\update-local.ps1 -Version "${{ env.VERSION }}" -Hot
+            .\update-local.ps1 -Version "${{ needs.prepare.outputs.version }}" -Hot
             ```
             Overwrites the files in place, then reload the plugin in
             Settings → Plugins → fish-school.
 
             **Manual**
-            1. Download `fish-${{ env.VERSION }}.tgz` and save it as `C:\harper\fish.tgz`
+            1. Download `fish-${{ needs.prepare.outputs.version }}.tgz` and save it as
+               `C:\harper\fish.tgz`
             2. `cd $env:USERPROFILE\.dsh\profiles\desktop`
             3. `pnpm install --no-frozen-lockfile`
             4. Restart DSH

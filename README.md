@@ -122,20 +122,27 @@ plugin_manager(action="install_bundle", target="@yourteam/fish-school@1.1.0", en
 
 ### 发布新版本（维护者）
 
+**推 tag 这一步已经自动化了**，合并到 `main` 时就会发版：
+
 ```bash
-# 1. 改版本号（语义化版本）
+# 1. 改版本号（语义化版本），两处都要改
 #    package.json 的 version
 #    lib/network.js 的 VERSION 常量（/hello 上报给其他鱼的就是它）
 
 # 2. 本地打包验证
 pwsh build-and-pack.ps1        # 产出 dist/fish-<version>.tgz
 
-# 3. 打 tag 推送，GitHub Actions 自动建 Release
-git tag v1.4.0
-git push origin v1.4.0
+# 3. 照常提 PR 并合并到 main —— 剩下交给 CI
 ```
 
-`.github/workflows/release.yml` 会在 tag 推送后跑语法检查、`npm pack`、重命名成 `fish-<version>.tgz` 并挂到 Release 上。
+合并后 `.github/workflows/release.yml` 会自动：读 `package.json` 的版本 → 若该版本还没有 Release，就创建 `v<version>` tag，跑语法检查、`npm pack`、重命名成 `fish-<version>.tgz` 挂到 Release 上。
+
+几点行为需要知道：
+
+- **版本号没变就什么也不做**：合并一个不涉及版本号的 PR，CI 会看到该版本已有 Release 直接跳过，不会重复发版。
+- **tag 不存在但 Release 缺**（例如上次构建失败）：再次合并会自动补发，不会重复打 tag。
+- **手动推 tag 仍然可用**，此时 tag 必须与 `package.json` 版本一致，否则工作流直接失败。
+- 打 tag 与发版放在同一个工作流里是刻意的：用 `GITHUB_TOKEN` 推出的 tag **不会**触发其他工作流（GitHub 防递归），拆成两个工作流会永远发不出 Release。
 
 ### 已知环境问题
 
