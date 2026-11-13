@@ -12,6 +12,9 @@ export const name = '@local/fish-school';
 // without this the plugin can apply before webServer exists and register nothing.
 export const inject = ['webServer', 'connection'];
 
+// How long the panel reuses a peer scan before asking the school again.
+const PANEL_REMOTE_TTL_MS = 8000;
+
 function toolDef(name, description, params, execute) {
   return {
     name,
@@ -152,6 +155,25 @@ export function apply(ctx, config = {}) {
       },
     }));
 
+    // The panel is a knowledge browser, so it must show the whole school, not only
+    // this machine's entries. Remote lookups are cached for a few seconds: the panel
+    // polls every 5 s and probing an offline fish costs up to 3 s of timeout.
+    let panelRemoteCache = { at: 0, sets: [] };
+    async function remoteEntriesForPanel(params) {
+      const cacheable = !params.query;
+      if (cacheable && Date.now() - panelRemoteCache.at < PANEL_REMOTE_TTL_MS) {
+        return panelRemoteCache.sets;
+      }
+      try {
+        const sets = await network.searchPeers(params);
+        if (cacheable) panelRemoteCache = { at: Date.now(), sets };
+        return sets;
+      } catch (err) {
+        logger.warn('panel peer search failed: %s', err.message);
+        return [];
+      }
+    }
+
     // GET /fish-school/v1/knowledge
     ctx.effect(() => webServer.register({
       kind: 'exact', path: '/fish-school/v1/knowledge',
@@ -162,12 +184,33 @@ export function apply(ctx, config = {}) {
         try {
           const url = new URL(req.url ?? '/', 'http://local');
           const type = url.searchParams.get('type') ?? undefined;
+          const tags = url.searchParams.get('tags') ?? undefined;
           const fishName = url.searchParams.get('fishName') ?? undefined;
           const q = url.searchParams.get('q') ?? '';
           const limit = parseInt(url.searchParams.get('limit') ?? '50', 10);
           // The owner's own panel sees private conversations so they can be re-published.
-          let entries = store.search({ query: q, type, limit, includePrivate: true });
-          if (fishName) entries = entries.filter(e => e.author === fishName);
+          const local = store.search({ query: q, tags, type, limit, includePrivate: true })
+            .map(e => ({ ...e, remote: false }));
+          // Peers only ever serve their public entries, so nothing private leaks here.
+          const sets = await remoteEntriesForPanel({ query: q, tags, type, limit });
+          const remote = sets.flatMap(set => (set.results ?? []).map(e => ({
+            ...e,
+            remote: true,
+            peerName: set.peer?.name ?? e.author,
+            peerAddress: set.peer?.address,
+          })));
+          // The same id can be reported by several fish; the local copy wins.
+          const seen = new Set();
+          let entries = [...local, ...remote].filter(e => {
+            const key = `${e.type}:${e.id}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          });
+          if (fishName) entries = entries.filter(e => e.author === fishName || e.peerName === fishName);
+          entries = entries
+            .sort((a, b) => String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? '')))
+            .slice(0, limit);
           return send(res, 200, { entries });
         } catch (err) { return send(res, 500, { error: err.message }); }
       },

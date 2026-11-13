@@ -1,6 +1,6 @@
 {
   "name": "@local/fish-school",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "private": true,
   "type": "module",
   "description": "鱼群插件：局域网内 DeepSeek Harness 实例的知识共享系统",
