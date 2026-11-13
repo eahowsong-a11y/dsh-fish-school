@@ -213,6 +213,72 @@ export function apply(ctx, config = {}) {
         } catch (err) { return send(res, 400, { error: err.message }); }
       },
     }));
+
+    // POST /fish-school/v1/upload — publish a local text file as knowledge
+    ctx.effect(() => webServer.register({
+      kind: 'exact', path: '/fish-school/v1/upload',
+      async handler(req, res) {
+        const rejection = connection.requestRejection({ headers: req.headers });
+        if (rejection) return send(res, rejection, { error: 'unauthorized' });
+        if (req.method !== 'POST') return send(res, 405, { error: 'method not allowed' });
+        try {
+          let raw = '';
+          for await (const chunk of req) {
+            raw += chunk;
+            if (raw.length > 2 * 1024 * 1024) throw new Error('File too large (max 1 MB of text)');
+          }
+          const body = JSON.parse(raw || '{}');
+          const text = typeof body.text === 'string' ? body.text : '';
+          if (!text.trim()) throw new Error('File is empty');
+          if (text.length > 1024 * 1024) throw new Error('File too large (max 1 MB of text)');
+          const name = String(body.name ?? 'uploaded.txt').slice(0, 200);
+          const summary = typeof body.summary === 'string' && body.summary.trim() ? body.summary.trim() : name;
+          const entry = store.saveKnowledge({
+            summary,
+            content: text,
+            tags: body.tags,
+            sourceFile: { name, size: Number(body.size) || text.length, mime: String(body.mime ?? '') },
+          });
+          return send(res, 200, { entry });
+        } catch (err) { return send(res, 400, { error: err.message }); }
+      },
+    }));
+
+    // POST /fish-school/v1/share-session — publish the current transcript without an LLM round trip
+    ctx.effect(() => webServer.register({
+      kind: 'exact', path: '/fish-school/v1/share-session',
+      async handler(req, res) {
+        const rejection = connection.requestRejection({ headers: req.headers });
+        if (rejection) return send(res, rejection, { error: 'unauthorized' });
+        if (req.method !== 'POST') return send(res, 405, { error: 'method not allowed' });
+        try {
+          let raw = '';
+          for await (const chunk of req) {
+            raw += chunk;
+            if (raw.length > 64 * 1024) throw new Error('Body too large');
+          }
+          const body = JSON.parse(raw || '{}');
+          const sessionId = String(body.sessionId ?? '');
+          if (!sessionId) throw new Error('Missing sessionId');
+          if (!ctx.get('sessions')?.get(sessionId)) throw new Error('That conversation is not live');
+          const messages = extractMessages(sessionId);
+          if (!messages.length) throw new Error('Nothing to share yet');
+          const title = typeof body.title === 'string' && body.title.trim()
+            ? body.title.trim()
+            : `Conversation ${new Date().toLocaleString()}`;
+          const entry = store.saveConversation({
+            title,
+            sessionId,
+            messages,
+            tags: body.tags,
+            isPublic: body.isPublic !== false,
+          });
+          return send(res, 200, {
+            entry: { id: entry.id, title: entry.title, messageCount: messages.length, isPublic: entry.isPublic },
+          });
+        } catch (err) { return send(res, 400, { error: err.message }); }
+      },
+    }));
   }
 
   //===== Agent Tools =====

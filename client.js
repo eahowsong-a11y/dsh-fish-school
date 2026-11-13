@@ -24,6 +24,17 @@ window.__ModuleLoader__.load({
         refHint2: 'Click an entry to insert a reference into your message',
         refInserted: 'Added {ref}', refFailed: 'Could not insert — click into the message box first',
         refDone: 'Done',
+        uploadTitle: 'Upload a file', uploadChoose: 'Choose file', uploadDrop: 'or drop a file here',
+        uploadHint: 'Text files only, up to 1 MB', uploadFieldSummary: 'Title', uploadFieldTags: 'Tags',
+        uploadGo: 'Upload', uploadCancel: 'Cancel', uploadTooBig: 'File is larger than 1 MB',
+        uploadBinary: 'That looks like a binary file — text only', uploadEmpty: 'File is empty',
+        uploadDone: 'Uploaded: {name}',
+        menuRef: 'Reference knowledge or a conversation', menuRefDesc: 'insert @fish/type/id into the message',
+        menuSum: 'Summarize this conversation and publish', menuSumDesc: 'the agent writes the summary, then publishes it',
+        menuShare: 'Share this conversation as-is', menuShareDesc: 'publish the full transcript, public or private',
+        shareFieldTitle: 'Title', sharePublic: 'Public to the school', shareGo: 'Share',
+        noSession: 'No conversation selected yet',
+        summarizePrompt: 'Summarize our conversation so far and publish it to the fish school:\n1) write 5-10 bullets covering the conclusions, decisions and reusable practices;\n2) then call fish_school_publish with a one-line summary, the full bullets as content, and comma-separated tags.',
       },
       zh: {
         title: '鱼群', subtitle: '在局域网内的 DeepSeek Harness 实例间共享知识',
@@ -40,6 +51,17 @@ window.__ModuleLoader__.load({
         refHint2: '点击条目，把引用插入你的消息',
         refInserted: '已插入 {ref}', refFailed: '插入失败：请先在输入框里点一下光标位置',
         refDone: '完成',
+        uploadTitle: '上传文件', uploadChoose: '选择文件', uploadDrop: '或把文件拖到这里',
+        uploadHint: '仅支持文本文件，最大 1 MB', uploadFieldSummary: '标题', uploadFieldTags: '标签',
+        uploadGo: '上传', uploadCancel: '取消', uploadTooBig: '文件超过 1 MB',
+        uploadBinary: '这看起来是二进制文件，只支持文本', uploadEmpty: '文件是空的',
+        uploadDone: '已上传：{name}',
+        menuRef: '引用知识或对话', menuRefDesc: '把 @鱼/类型/id 插入消息',
+        menuSum: '总结本次对话并发布', menuSumDesc: '由 Agent 写总结，再调用工具发布',
+        menuShare: '上传本次对话原文', menuShareDesc: '直接分享完整对话，可设公开/私有',
+        shareFieldTitle: '标题', sharePublic: '公开给鱼群', shareGo: '上传',
+        noSession: '还没有选中对话',
+        summarizePrompt: '请总结我们刚才这段对话并发布到鱼群：\n1) 用 5-10 条要点写出结论、决策和可复用的做法；\n2) 然后调用 fish_school_publish 发布，summary 写一句话标题，content 放完整要点，tags 用逗号分隔。',
       },
     };
 
@@ -107,7 +129,8 @@ window.__ModuleLoader__.load({
         style: { padding: '10px 12px', background: 'var(--dsw-alias-bg-layer-2)', borderRadius: 8, marginBottom: 8 },
       },
         h('div', { style: { display: 'flex', alignItems: 'flex-start', gap: 8 } },
-          h('span', { style: { fontSize: 16, flexShrink: 0, marginTop: 1 } }, isConv ? '💬' : '📄'),
+          h('span', { style: { fontSize: 16, flexShrink: 0, marginTop: 1 } },
+            isConv ? '💬' : e.sourceFile ? '📎' : '📄'),
           h('div', { style: { flex: 1, minWidth: 0 } },
             h('div', {
               style: { fontWeight: 600, fontSize: 13, cursor: 'pointer', marginBottom: 3 },
@@ -120,6 +143,7 @@ window.__ModuleLoader__.load({
             h('div', { style: { fontSize: 11, ...S.muted, marginTop: 4 } },
               `${e.author} · `,
               isConv ? `${e.messageCount} msgs` : '',
+              !isConv && e.sourceFile ? ` · ${e.sourceFile.name}` : '',
               expanded && h('div', {
                 style: { marginTop: 8, fontSize: 11, fontFamily: 'monospace',
                   padding: '4px 8px', borderRadius: 4, background: 'var(--dsw-alias-bg-base)',
@@ -142,6 +166,109 @@ window.__ModuleLoader__.load({
             }, '🗑')
           )
         )
+      );
+    }
+
+    // Panel control: publish a local text file as knowledge.
+    function UploadCard({ t, onUploaded }) {
+      const [file, setFile] = useState(null); // { name, size, mime, text }
+      const [summary, setSummary] = useState('');
+      const [tags, setTags] = useState('');
+      const [busy, setBusy] = useState(false);
+      const [error, setError] = useState('');
+      const [drag, setDrag] = useState(false);
+      const [done, setDone] = useState('');
+      const inputRef = React.useRef(null);
+      const MAX = 1024 * 1024;
+
+      const pick = useCallback(async (f) => {
+        setError(''); setDone('');
+        if (!f) return;
+        if (f.size > MAX) { setError(t('uploadTooBig')); return; }
+        let text;
+        try { text = await f.text(); } catch (err) { setError(err.message); return; }
+        if (text.includes('\u0000') || text.includes('\uFFFD')) { setError(t('uploadBinary')); return; }
+        text = text.replace(/^\uFEFF/, '');
+        if (!text.trim()) { setError(t('uploadEmpty')); return; }
+        setFile({ name: f.name, size: f.size, mime: f.type || '', text });
+        setSummary(f.name.replace(/\.[^.]+$/, ''));
+      }, [t]);
+
+      const upload = useCallback(async () => {
+        if (!file) return;
+        setBusy(true); setError('');
+        try {
+          await api('/upload', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name: file.name, size: file.size, mime: file.mime, text: file.text,
+              summary: summary.trim() || file.name, tags,
+            }),
+          });
+          const name = file.name;
+          setFile(null); setSummary(''); setTags('');
+          setDone(t('uploadDone', { name }));
+          onUploaded();
+        } catch (err) {
+          setError(err.message);
+        } finally { setBusy(false); }
+      }, [file, summary, tags, onUploaded, t]);
+
+      return h('div', { style: { marginBottom: 14 } },
+        file
+          ? h('div', { style: { padding: 12, background: 'var(--dsw-alias-bg-layer-2)', borderRadius: 8 } },
+              h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 } },
+                h('span', { style: { fontSize: 16 } }, '📎'),
+                h('div', { style: { minWidth: 0, flex: 1 } },
+                  h('div', {
+                    style: { fontSize: 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+                  }, file.name),
+                  h('div', { style: { fontSize: 11, ...S.muted } }, `${Math.max(1, Math.round(file.size / 1024))} KB`)
+                ),
+                h('button', {
+                  style: S.btnSmall, disabled: busy,
+                  onClick: () => { setFile(null); setError(''); },
+                }, t('uploadCancel'))
+              ),
+              h('div', { style: { display: 'flex', gap: 6, marginBottom: 8 } },
+                h('input', {
+                  style: S.input, value: summary, disabled: busy, placeholder: t('uploadFieldSummary'),
+                  onChange: e => setSummary(e.target.value),
+                }),
+                h('input', {
+                  style: { ...S.input, flex: '0 0 170px' }, value: tags, disabled: busy,
+                  placeholder: t('uploadFieldTags'),
+                  onChange: e => setTags(e.target.value),
+                })
+              ),
+              h('button', {
+                style: { ...S.btn, background: 'var(--dsw-alias-brand-primary)', color: '#fff', border: 'none' },
+                disabled: busy || !summary.trim(), onClick: upload,
+              }, busy ? t('saving') : t('uploadGo'))
+            )
+          : h('div', {
+              onDragOver: (e) => { e.preventDefault(); setDrag(true); },
+              onDragLeave: () => setDrag(false),
+              onDrop: (e) => { e.preventDefault(); setDrag(false); pick(e.dataTransfer?.files?.[0]); },
+              style: {
+                padding: '14px 12px', borderRadius: 8, textAlign: 'center',
+                border: `1px dashed ${drag ? 'var(--dsw-alias-brand-primary)' : 'var(--dsw-alias-border-l2)'}`,
+                background: drag ? 'var(--dsw-alias-bg-layer-2)' : 'transparent',
+              },
+            },
+              h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, flexWrap: 'wrap' } },
+                h('button', { style: S.btn, onClick: () => inputRef.current?.click() }, '📎 ' + t('uploadChoose')),
+                h('span', { style: { fontSize: 12, ...S.muted } }, t('uploadDrop'))
+              ),
+              h('div', { style: { fontSize: 10.5, ...S.muted, marginTop: 6 } }, t('uploadHint')),
+              h('input', {
+                ref: inputRef, type: 'file', style: { display: 'none' },
+                onChange: (e) => { pick(e.target.files?.[0]); e.target.value = ''; },
+              })
+            ),
+        error ? h('div', { style: { fontSize: 11.5, color: 'var(--dsw-alias-state-error-primary)', marginTop: 6 } }, error) : null,
+        done ? h('div', { style: { fontSize: 11.5, color: 'var(--dsw-alias-state-success-primary)', marginTop: 6 } }, done) : null
       );
     }
 
@@ -240,6 +367,7 @@ window.__ModuleLoader__.load({
         // Knowledge library card
         h('div', { style: S.card },
           h('h2', { style: S.h2 }, t('knowledge')),
+          h(UploadCard, { t, onUploaded: refresh }),
           // Tab bar
           h('div', { style: { display: 'flex', gap: 6, marginBottom: 12 } },
             [['all', t('tabAll')], ['files', '📄 ' + t('tabFiles')], ['conversations', '💬 ' + t('tabConv')]].map(([id, label]) =>
@@ -277,13 +405,18 @@ window.__ModuleLoader__.load({
       );
     }
 
-    // Composer control: pick the whole school or one fish, then an entry; inserts a reference token.
-    function ReferenceButton({ inputActions, t }) {
+    // Composer control: reference an entry, summarize-and-publish, or share this conversation.
+    function FishComposerButton({ inputActions, sessionId, t }) {
       const [open, setOpen] = useState(false);
+      const [mode, setMode] = useState('menu'); // menu | pick | share
       const [data, setData] = useState({ status: null, entries: [] });
       const [scope, setScope] = useState('all');
       const [note, setNote] = useState('');
       const [busy, setBusy] = useState(false);
+      const [shareTitle, setShareTitle] = useState('');
+      const [shareTags, setShareTags] = useState('');
+      const [sharePublic, setSharePublic] = useState(true);
+      const [sharing, setSharing] = useState(false);
       const wrap = React.useRef(null);
 
       const load = useCallback(async () => {
@@ -321,6 +454,37 @@ window.__ModuleLoader__.load({
         }
       }, [inputActions, t]);
 
+      // Insert a ready-made prompt; the agent writes the summary and calls fish_school_publish.
+      const doSummarize = useCallback(() => {
+        try {
+          const span = inputActions?.captureInsertion?.();
+          const result = inputActions?.insertText?.(t('summarizePrompt'), span);
+          if (result === false) { setNote(t('refFailed')); setMode('menu'); return; }
+          setOpen(false);
+        } catch (err) {
+          setNote(err.message);
+          setMode('menu');
+        }
+      }, [inputActions, t]);
+
+      // Publish the current transcript directly, without an LLM round trip.
+      const doShare = useCallback(async () => {
+        if (!sessionId) return;
+        setSharing(true); setNote('');
+        try {
+          const { entry } = await api('/share-session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sessionId, title: shareTitle.trim(), tags: shareTags, isPublic: sharePublic }),
+          });
+          setNote(`✅ ${entry.title} · ${entry.messageCount} msgs`);
+          setShareTitle(''); setShareTags('');
+          setMode('menu');
+        } catch (err) {
+          setNote(err.message);
+        } finally { setSharing(false); }
+      }, [sessionId, shareTitle, shareTags, sharePublic]);
+
       const me = data.status?.me?.name;
       const peers = data.status?.peers || [];
       const scopes = ['all', 'mine', ...peers.map(p => p.name)];
@@ -333,7 +497,7 @@ window.__ModuleLoader__.load({
       return h('div', { ref: wrap, style: { position: 'relative', display: 'inline-flex' } },
         h('button', {
           type: 'button',
-          onClick: () => setOpen(v => !v),
+          onClick: () => { setOpen(v => !v); setMode('menu'); setNote(''); },
           title: t('ref'), 'aria-label': t('ref'),
           'aria-expanded': open ? 'true' : 'false',
           style: {
@@ -354,59 +518,134 @@ window.__ModuleLoader__.load({
             boxShadow: '0 10px 28px rgba(0,0,0,0.18)',
           },
         },
-          h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 8 } },
-            scopes.map(s => h('button', {
-              key: s, type: 'button', onClick: () => setScope(s),
-              style: {
-                padding: '3px 8px', fontSize: 11, borderRadius: 999, cursor: 'pointer',
-                border: '1px solid ' + (scope === s ? 'transparent' : 'var(--dsw-alias-border-l2)'),
-                background: scope === s ? 'var(--dsw-alias-brand-primary)' : 'transparent',
-                color: scope === s ? '#fff' : 'var(--dsw-alias-label-secondary)',
-              },
-            }, s === 'all' ? t('refAll') : s === 'mine' ? t('refMine') : s))
-          ),
-
-          busy
-            ? h('div', { style: { padding: 16, textAlign: 'center', fontSize: 12, color: 'var(--dsw-alias-label-secondary)' } }, t('loading'))
-            : entries.length === 0
-              ? h('div', { style: { padding: 16, textAlign: 'center', fontSize: 12, color: 'var(--dsw-alias-label-secondary)' } }, t('refEmpty'))
-              : h('div', null, entries.map(e => h('button', {
-                  key: e.id, type: 'button', onClick: () => insert(e),
-                  title: `@${e.author}/${e.type}/${e.id}`,
+          mode === 'menu'
+            ? h('div', null,
+                h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)', marginBottom: 6 } }, t('title')),
+                [
+                  ['pick', '📚', t('menuRef'), t('menuRefDesc')],
+                  ['sum', '🧠', t('menuSum'), t('menuSumDesc')],
+                  ['share', '💬', t('menuShare'), t('menuShareDesc')],
+                ].map(([key, icon, label, desc]) => h('button', {
+                  key, type: 'button',
+                  onClick: () => {
+                    if (key === 'sum') { doSummarize(); return; }
+                    setNote('');
+                    setMode(key);
+                  },
                   style: {
                     display: 'flex', alignItems: 'flex-start', gap: 8, width: '100%',
-                    textAlign: 'left', padding: '7px 8px', marginBottom: 2,
+                    textAlign: 'left', padding: '8px', marginBottom: 2,
                     background: 'transparent', border: 'none', borderRadius: 6,
                     cursor: 'pointer', color: 'var(--dsw-alias-label-primary)',
                   },
                 },
-                  h('span', { style: { flexShrink: 0, fontSize: 13 } }, e.type === 'knowledge' ? '📄' : '💬'),
+                  h('span', { style: { fontSize: 14, flexShrink: 0 } }, icon),
                   h('span', { style: { minWidth: 0, flex: 1 } },
-                    h('div', {
-                      style: { fontSize: 12.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-                    }, e.type === 'knowledge' ? e.summary : e.title),
-                    h('div', { style: { fontSize: 10.5, color: 'var(--dsw-alias-label-secondary)' } },
-                      e.author, e.type === 'conversation' ? ` · ${e.messageCount ?? 0} msgs` : '')
+                    h('div', { style: { fontSize: 12.5, fontWeight: 500 } }, label),
+                    h('div', { style: { fontSize: 10.5, color: 'var(--dsw-alias-label-secondary)' } }, desc)
                   )
-                ))),
+                )),
+                note ? h('div', { style: { marginTop: 6, paddingTop: 6, borderTop: '1px solid var(--dsw-alias-border-l1)', fontSize: 10.5, color: 'var(--dsw-alias-label-secondary)' } }, note) : null
+              )
+            : mode === 'share'
+              ? h('div', null,
+                  h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)', marginBottom: 6 } }, t('menuShare')),
+                  h('input', {
+                    style: { ...S.input, width: '100%', boxSizing: 'border-box', marginBottom: 6 },
+                    value: shareTitle, placeholder: t('shareFieldTitle'),
+                    onChange: e => setShareTitle(e.target.value),
+                  }),
+                  h('input', {
+                    style: { ...S.input, width: '100%', boxSizing: 'border-box', marginBottom: 8 },
+                    value: shareTags, placeholder: t('uploadFieldTags'),
+                    onChange: e => setShareTags(e.target.value),
+                  }),
+                  h('label', {
+                    style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, marginBottom: 8, color: 'var(--dsw-alias-label-primary)' },
+                  },
+                    h('input', { type: 'checkbox', checked: sharePublic, onChange: e => setSharePublic(e.target.checked) }),
+                    t('sharePublic')
+                  ),
+                  !sessionId
+                    ? h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-state-warn-primary)', marginBottom: 8 } }, t('noSession'))
+                    : null,
+                  h('div', { style: { display: 'flex', gap: 6, alignItems: 'center' } },
+                    h('button', {
+                      type: 'button', onClick: doShare, disabled: sharing || !sessionId,
+                      style: {
+                        padding: '5px 12px', fontSize: 12, borderRadius: 6, border: 'none',
+                        cursor: (sharing || !sessionId) ? 'not-allowed' : 'pointer',
+                        background: 'var(--dsw-alias-brand-primary)', color: '#fff',
+                        opacity: (sharing || !sessionId) ? 0.5 : 1,
+                      },
+                    }, sharing ? t('saving') : t('shareGo')),
+                    h('button', {
+                      type: 'button', onClick: () => { setMode('menu'); setNote(''); },
+                      style: S.btnSmall,
+                    }, t('cancel')),
+                    h('span', { style: { fontSize: 10.5, color: 'var(--dsw-alias-label-secondary)', flex: 1 } }, note || '')
+                  )
+                )
+              : h('div', null,
+                  h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 8 } },
+                    scopes.map(s => h('button', {
+                      key: s, type: 'button', onClick: () => setScope(s),
+                      style: {
+                        padding: '3px 8px', fontSize: 11, borderRadius: 999, cursor: 'pointer',
+                        border: '1px solid ' + (scope === s ? 'transparent' : 'var(--dsw-alias-border-l2)'),
+                        background: scope === s ? 'var(--dsw-alias-brand-primary)' : 'transparent',
+                        color: scope === s ? '#fff' : 'var(--dsw-alias-label-secondary)',
+                      },
+                    }, s === 'all' ? t('refAll') : s === 'mine' ? t('refMine') : s))
+                  ),
 
-          h('div', {
-            style: {
-              marginTop: 6, paddingTop: 6, borderTop: '1px solid var(--dsw-alias-border-l1)',
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
-            },
-          },
-            h('span', { style: { fontSize: 10.5, color: 'var(--dsw-alias-label-secondary)', flex: 1 } },
-              note || t('refHint2')),
-            h('button', {
-              type: 'button', onClick: () => setOpen(false),
-              style: {
-                padding: '3px 10px', fontSize: 11, borderRadius: 4, cursor: 'pointer',
-                border: '1px solid var(--dsw-alias-border-l2)', background: 'transparent',
-                color: 'var(--dsw-alias-label-primary)',
-              },
-            }, t('refDone'))
-          )
+                  busy
+                    ? h('div', { style: { padding: 16, textAlign: 'center', fontSize: 12, color: 'var(--dsw-alias-label-secondary)' } }, t('loading'))
+                    : entries.length === 0
+                      ? h('div', { style: { padding: 16, textAlign: 'center', fontSize: 12, color: 'var(--dsw-alias-label-secondary)' } }, t('refEmpty'))
+                      : h('div', null, entries.map(e => h('button', {
+                          key: e.id, type: 'button', onClick: () => insert(e),
+                          title: `@${e.author}/${e.type}/${e.id}`,
+                          style: {
+                            display: 'flex', alignItems: 'flex-start', gap: 8, width: '100%',
+                            textAlign: 'left', padding: '7px 8px', marginBottom: 2,
+                            background: 'transparent', border: 'none', borderRadius: 6,
+                            cursor: 'pointer', color: 'var(--dsw-alias-label-primary)',
+                          },
+                        },
+                          h('span', { style: { flexShrink: 0, fontSize: 13 } },
+                            e.type === 'conversation' ? '💬' : e.sourceFile ? '📎' : '📄'),
+                          h('span', { style: { minWidth: 0, flex: 1 } },
+                            h('div', {
+                              style: { fontSize: 12.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+                            }, e.type === 'knowledge' ? e.summary : e.title),
+                            h('div', { style: { fontSize: 10.5, color: 'var(--dsw-alias-label-secondary)' } },
+                              e.author, e.type === 'conversation' ? ` · ${e.messageCount ?? 0} msgs` : '')
+                          )
+                        ))),
+
+                  h('div', {
+                    style: {
+                      marginTop: 6, paddingTop: 6, borderTop: '1px solid var(--dsw-alias-border-l1)',
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+                    },
+                  },
+                    h('span', { style: { fontSize: 10.5, color: 'var(--dsw-alias-label-secondary)', flex: 1 } },
+                      note || t('refHint2')),
+                    h('button', {
+                      type: 'button', onClick: () => { setMode('menu'); setNote(''); },
+                      style: S.btnSmall,
+                    }, t('cancel')),
+                    h('button', {
+                      type: 'button', onClick: () => setOpen(false),
+                      style: {
+                        padding: '3px 10px', fontSize: 11, borderRadius: 4, cursor: 'pointer',
+                        border: '1px solid var(--dsw-alias-border-l2)', background: 'transparent',
+                        color: 'var(--dsw-alias-label-primary)',
+                      },
+                    }, t('refDone'))
+                  )
+                )
         ) : null
       );
     }
@@ -439,7 +678,7 @@ window.__ModuleLoader__.load({
         ctx.slots.inject('conversation.input.left', () =>
           ctx.slots.register(
             { name: 'conversation.input.left', id: 'fish-school-reference', order: 50 },
-            (props) => h(ReferenceButton, { inputActions: props.inputActions, t })
+            (props) => h(FishComposerButton, { inputActions: props.inputActions, sessionId: props.sessionId, t })
           )
         );
 
