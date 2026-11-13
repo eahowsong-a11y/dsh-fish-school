@@ -1,0 +1,8 @@
+- insert:
+    - id: fish-school
+      name: '@local/fish-school'
+      config:
+        port: 37775
+        multicastAddress: '239.255.37.77'
+        storageDir: ''
+        deviceName: ''

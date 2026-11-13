@@ -1,0 +1,555 @@
+/**
+ * Fish School Plugin - Main Host Entry Point
+ */
+
+import { join } from 'node:path';
+import { createStore } from './lib/store.js';
+import { startNetwork } from './lib/network.js';
+
+export const name = '@local/fish-school';
+
+// The panel's HTTP routes live on the browser carrier, so activation must wait for it:
+// without this the plugin can apply before webServer exists and register nothing.
+export const inject = ['webServer', 'connection'];
+
+function toolDef(name, description, params, execute) {
+  return {
+    name,
+    description,
+    parameters: { type: 'object', properties: params.properties, required: params.required ?? [] },
+    output: {
+      schema: { type: 'object' },
+      // The rendered blocks ARE what the model reads, so entries must be inlined here.
+      render(args, value) {
+        const lines = [];
+        if (value?.message) lines.push(value.message);
+        if (value?.success === false && value?.error) lines.push(`❌ ${value.error}`);
+
+        const items = Array.isArray(value?.results) ? value.results
+          : Array.isArray(value?.entries) ? value.entries
+          : Array.isArray(value?.messages) ? value.messages : null;
+
+        for (const it of items ?? []) {
+          if (!it) continue;
+          if (it.ok === false) { lines.push(`- ${it.ref ?? '?'}: ${it.error ?? 'failed'}`); continue; }
+          const title = it.title ?? it.summary ?? '(untitled)';
+          const head = [
+            it.type ? `[${it.type}]` : '',
+            title,
+            it.author ? `— ${it.author}` : '',
+          ].filter(Boolean).join(' ');
+          lines.push(`\n### ${head}`);
+          if (it.tags?.length) lines.push(`tags: ${it.tags.join(', ')}`);
+          if (it.author && it.type && it.id) lines.push(`reference: @${it.author}/${it.type}/${it.id}`);
+          if (it.content) lines.push(String(it.content));
+          else if (it.messageCount) lines.push(`(${it.messageCount} messages)`);
+        }
+
+        const text = lines.join('\n').trim();
+        return [{ type: 'text', text: text || JSON.stringify(value) }];
+      },
+    },
+    async execute(args, execCtx) {
+      try {
+        return await execute(args, execCtx);
+      } catch (err) {
+        return { success: false, error: err.message };
+      }
+    },
+  };
+}
+
+/** Extract text content blocks from a ContentBlock array */
+function blocksToText(blocks) {
+  if (!Array.isArray(blocks)) return '';
+  return blocks
+    .filter(b => b?.type === 'text' && b.text)
+    .map(b => b.text)
+    .join('');
+}
+
+export function apply(ctx, config = {}) {
+  config.port = config.port ?? 37775;
+  config.multicastAddress = config.multicastAddress ?? '239.255.37.77';
+  config.storageDir = config.storageDir || join(process.env.DSH_PROFILE_DIR || '.', 'fish-school');
+
+  const logger = ctx.logger('fish-school');
+  const store = createStore(config.storageDir);
+  const network = startNetwork({ store, config, logger });
+
+  /**
+   * Extract conversation messages from a live session using the official API.
+   * Returns simplified {role, text, time} objects safe to serialize.
+   */
+  function extractMessages(agentId) {
+    try {
+      const sessions = ctx.get('sessions');
+      if (!sessions) return [];
+      const session = sessions.get(agentId);
+      if (!session) return [];
+
+      // deriveMessages() gives us the canonical message list used by the LLM
+      const messages = session.deriveMessages();
+      const result = [];
+
+      for (const msg of messages) {
+        if (msg.role === 'user') {
+          const text = blocksToText(msg.content);
+          if (text) result.push({ role: 'user', text });
+        } else if (msg.role === 'assistant') {
+          const text = blocksToText(msg.content);
+          if (text) result.push({ role: 'assistant', text });
+        }
+      }
+      return result;
+    } catch (err) {
+      logger.warn('extractMessages failed: %s', err.message);
+      return [];
+    }
+  }
+
+  //===== Host API for the panel =====
+  const webServer = ctx.get('webServer');
+  const connection = ctx.get('connection');
+  if (!webServer || !connection) {
+    logger.warn('webServer/connection unavailable — panel routes not registered');
+  }
+  if (webServer && connection) {
+    const send = (res, status, body) => {
+      res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify(body));
+    };
+
+    // GET /fish-school/v1/status
+    ctx.effect(() => webServer.register({
+      kind: 'exact', path: '/fish-school/v1/status',
+      async handler(req, res) {
+        const rejection = connection.requestRejection({ headers: req.headers });
+        if (rejection) return send(res, rejection, { error: 'unauthorized' });
+        if (req.method !== 'GET') return send(res, 405, { error: 'method not allowed' });
+        try {
+          return send(res, 200, {
+            me: store.identity(),
+            port: config.port,
+            storageDir: config.storageDir,
+            knowledgeCount: store.all().length,
+            peers: network.listPeers(),
+          });
+        } catch (err) { return send(res, 500, { error: err.message }); }
+      },
+    }));
+
+    // GET /fish-school/v1/knowledge
+    ctx.effect(() => webServer.register({
+      kind: 'exact', path: '/fish-school/v1/knowledge',
+      async handler(req, res) {
+        const rejection = connection.requestRejection({ headers: req.headers });
+        if (rejection) return send(res, rejection, { error: 'unauthorized' });
+        if (req.method !== 'GET') return send(res, 405, { error: 'method not allowed' });
+        try {
+          const url = new URL(req.url ?? '/', 'http://local');
+          const type = url.searchParams.get('type') ?? undefined;
+          const fishName = url.searchParams.get('fishName') ?? undefined;
+          const q = url.searchParams.get('q') ?? '';
+          const limit = parseInt(url.searchParams.get('limit') ?? '50', 10);
+          // The owner's own panel sees private conversations so they can be re-published.
+          let entries = store.search({ query: q, type, limit, includePrivate: true });
+          if (fishName) entries = entries.filter(e => e.author === fishName);
+          return send(res, 200, { entries });
+        } catch (err) { return send(res, 500, { error: err.message }); }
+      },
+    }));
+
+    // POST /fish-school/v1/rename
+    ctx.effect(() => webServer.register({
+      kind: 'exact', path: '/fish-school/v1/rename',
+      async handler(req, res) {
+        const rejection = connection.requestRejection({ headers: req.headers });
+        if (rejection) return send(res, rejection, { error: 'unauthorized' });
+        if (req.method !== 'POST') return send(res, 405, { error: 'method not allowed' });
+        try {
+          let raw = '';
+          for await (const chunk of req) { raw += chunk; if (raw.length > 4096) throw new Error('Body too large'); }
+          const identity = store.rename(JSON.parse(raw || '{}').name);
+          network.announce();
+          return send(res, 200, { me: identity });
+        } catch (err) { return send(res, 400, { error: err.message }); }
+      },
+    }));
+
+    // DELETE /fish-school/v1/knowledge/:id
+    ctx.effect(() => webServer.register({
+      kind: 'exact', path: '/fish-school/v1/delete',
+      async handler(req, res) {
+        const rejection = connection.requestRejection({ headers: req.headers });
+        if (rejection) return send(res, rejection, { error: 'unauthorized' });
+        if (req.method !== 'POST') return send(res, 405, { error: 'method not allowed' });
+        try {
+          let raw = '';
+          for await (const chunk of req) { raw += chunk; }
+          const { id } = JSON.parse(raw || '{}');
+          if (!id) throw new Error('Missing id');
+          store.remove(id);
+          return send(res, 200, { ok: true });
+        } catch (err) { return send(res, 400, { error: err.message }); }
+      },
+    }));
+
+    // POST /fish-school/v1/set-visibility
+    ctx.effect(() => webServer.register({
+      kind: 'exact', path: '/fish-school/v1/set-visibility',
+      async handler(req, res) {
+        const rejection = connection.requestRejection({ headers: req.headers });
+        if (rejection) return send(res, rejection, { error: 'unauthorized' });
+        if (req.method !== 'POST') return send(res, 405, { error: 'method not allowed' });
+        try {
+          let raw = '';
+          for await (const chunk of req) { raw += chunk; }
+          const { id, isPublic } = JSON.parse(raw || '{}');
+          if (!id) throw new Error('Missing id');
+          store.setVisibility(id, Boolean(isPublic));
+          return send(res, 200, { ok: true });
+        } catch (err) { return send(res, 400, { error: err.message }); }
+      },
+    }));
+  }
+
+  //===== Agent Tools =====
+  const tools = ctx.get('tools');
+  if (tools) {
+    tools.register(toolDef(
+      'fish_school_publish',
+      'Publish knowledge (file, snippet, summary) to the fish school network',
+      {
+        properties: {
+          summary: { type: 'string', description: 'Brief summary of the knowledge' },
+          content: { type: 'string', description: 'Full content to publish' },
+          tags: { type: 'string', description: 'Tags for categorization (comma-separated)' },
+        },
+        required: ['summary', 'content'],
+      },
+      async ({ summary, content, tags }) => {
+        const entry = store.saveKnowledge({ summary, content, tags });
+        return {
+          success: true,
+          id: entry.id,
+          peersCount: network.listPeers().length,
+          message: `✅ Published knowledge (ID: ${entry.id}), ${network.listPeers().length} peer(s) will see it`,
+        };
+      }
+    ));
+
+    tools.register(toolDef(
+      'fish_school_share_conversation',
+      'Share current conversation to the fish school network',
+      {
+        properties: {
+          title: { type: 'string', description: 'Conversation title' },
+          tags: { type: 'string', description: 'Tags for categorization (comma-separated)' },
+          isPublic: { type: 'boolean', description: 'Whether to make this public (default: true)', default: true },
+        },
+        required: ['title'],
+      },
+      async ({ title, tags, isPublic = true }, execCtx) => {
+        const agentId = execCtx?.agent?.id;
+        if (!agentId) throw new Error('Cannot share: no agent context');
+
+        const messages = extractMessages(agentId);
+        const entry = store.saveConversation({
+          title,
+          sessionId: agentId,
+          messages,
+          tags,
+          isPublic,
+        });
+
+        return {
+          success: true,
+          id: entry.id,
+          isPublic: entry.isPublic,
+          messageCount: messages.length,
+          peersCount: network.listPeers().length,
+          message: `✅ Shared "${title}" (${messages.length} messages, ID: ${entry.id})`,
+        };
+      }
+    ));
+
+    tools.register(toolDef(
+      'fish_school_query',
+      'Query knowledge from the network using keywords, tags, or filter by specific fish or type',
+      {
+        properties: {
+          query: { type: 'string', description: 'Search keywords' },
+          tags: { type: 'string', description: 'Filter by tags (comma-separated)' },
+          type: { type: 'string', description: 'Filter by type: knowledge or conversation' },
+          fishName: { type: 'string', description: 'Filter by fish name (author)' },
+          limit: { type: 'number', description: 'Maximum number of results', default: 10 },
+        },
+        required: ['query'],
+      },
+      async ({ query, tags, type, fishName, limit = 10 }) => {
+        const local = store.search({ query, tags, type, limit });
+        const remoteSet = await network.searchPeers({ query, tags, type, limit });
+        const remote = remoteSet.flatMap(r => r.results);
+        let combined = [...local, ...remote];
+        if (fishName) combined = combined.filter(e => e.author === fishName);
+        combined = combined.slice(0, limit);
+        return { success: true, results: combined, count: combined.length };
+      }
+    ));
+
+    tools.register(toolDef(
+      'fish_school_list',
+      'List recent entries from the network, optionally filtered',
+      {
+        properties: {
+          limit: { type: 'number', description: 'Maximum number of entries', default: 20 },
+          tags: { type: 'string', description: 'Filter by tags (comma-separated)' },
+          type: { type: 'string', description: 'Filter by type: knowledge or conversation' },
+          fishName: { type: 'string', description: 'Filter by fish name (author)' },
+        },
+      },
+      async ({ limit = 20, tags, type, fishName }) => {
+        const local = store.search({ tags, type, limit });
+        const remoteSet = await network.searchPeers({ tags, type, limit });
+        const remote = remoteSet.flatMap(r => r.results);
+        let entries = [...local, ...remote];
+        if (fishName) entries = entries.filter(e => e.author === fishName);
+        entries = entries.slice(0, limit);
+        return {
+          success: true,
+          entries: entries.map(e => ({
+            id: e.id,
+            type: e.type,
+            summary: e.type === 'knowledge' ? e.summary : e.title,
+            title: e.type === 'knowledge' ? e.summary : e.title,
+            tags: e.tags ?? [],
+            author: e.author ?? 'unknown',
+          })),
+          count: entries.length,
+          message: `📚 ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'} — ${local.length} local, ${remote.length} from peers`,
+        };
+      }
+    ));
+
+    tools.register(toolDef(
+      'fish_school_get_conversation',
+      'Retrieve a shared conversation with its full context',
+      {
+        properties: {
+          conversationId: { type: 'string', description: 'Conversation ID to retrieve' },
+          fishName: { type: 'string', description: 'Fish name (author) — omit for local, provide to fetch from a specific peer' },
+        },
+        required: ['conversationId'],
+      },
+      async ({ conversationId, fishName }) => {
+        // Try local first
+        if (!fishName) {
+          const conv = store.getConversation(conversationId);
+          if (conv) {
+            return {
+              success: true,
+              title: conv.title,
+              author: conv.author,
+              tags: conv.tags,
+              messageCount: conv.messages?.length || 0,
+              messages: conv.messages,
+              createdAt: conv.createdAt,
+              message: `📖 "${conv.title}" (${conv.messages?.length || 0} messages from ${conv.author})`,
+            };
+          }
+        }
+
+        // Try specific peer by name
+        const peerName = fishName ?? undefined;
+        const targetPeers = peerName
+          ? [network.findPeer(peerName)].filter(Boolean)
+          : network.listPeers();
+
+        for (const peer of targetPeers) {
+          const entry = await network.getFromPeer(peer, conversationId);
+          if (entry) {
+            return {
+              success: true,
+              title: entry.title,
+              author: entry.author ?? peer.name,
+              tags: entry.tags,
+              messageCount: entry.messages?.length || entry.messageCount || 0,
+              messages: entry.messages,
+              createdAt: entry.createdAt,
+              message: `📖 "${entry.title}" (from ${entry.author ?? peer.name})`,
+            };
+          }
+        }
+
+        throw new Error('Conversation not found or not public');
+      }
+    ));
+
+    tools.register(toolDef(
+      'fish_school_find_knowledge',
+      'Find knowledge or conversation by fish name or ID',
+      {
+        properties: {
+          fishName: { type: 'string', description: 'Fish name to search' },
+          type: { type: 'string', description: 'Filter by type: knowledge or conversation' },
+          limit: { type: 'number', description: 'Maximum results', default: 10 },
+        },
+      },
+      async ({ fishName, type, limit = 10 }) => {
+        let results = store.all().filter(e => {
+          if (fishName && e.author !== fishName) return false;
+          if (type && e.type !== type) return false;
+          return true;
+        }).slice(0, limit);
+        return {
+          success: true,
+          results,
+          count: results.length,
+          message: `🔍 Found ${results.length} item(s)`,
+        };
+      }
+    ));
+    tools.register(toolDef(
+      'fish_school_read',
+      'Load the full content behind fish-school reference tokens, so you can use another fish\'s knowledge or conversation as context',
+      {
+        properties: {
+          refs: { type: 'string', description: 'Reference tokens or ids separated by spaces or commas, e.g. "@alice/knowledge/1794-1a2b3c4d"' },
+          fishName: { type: 'string', description: 'Optional fish name to ask when a token carries no author' },
+        },
+        required: ['refs'],
+      },
+      async ({ refs, fishName }) => {
+        const tokens = String(refs).split(/[\s,]+/).map(s => s.trim()).filter(Boolean).slice(0, 10);
+        const mine = store.identity();
+        const results = [];
+
+        for (const token of tokens) {
+          const parts = token.replace(/^@/, '').split('/').filter(Boolean);
+          const id = parts[parts.length - 1] ?? '';
+          const owner = parts.length >= 3 ? parts[0] : fishName;
+
+          if (!/^[0-9]+-[0-9a-f]{8}$/.test(id)) {
+            results.push({ ref: token, ok: false, error: 'Not a valid fish-school reference' });
+            continue;
+          }
+
+          let entry = null;
+          let source = mine.name;
+
+          if (!owner || owner === mine.name) {
+            entry = store.all().find(e => e.id === id) ?? null;
+            if (entry?.type === 'conversation') entry = store.getConversation(id) ?? entry;
+          }
+
+          if (!entry) {
+            const candidates = owner
+              ? [network.findPeer(owner)].filter(Boolean)
+              : network.listPeers();
+            for (const peer of candidates) {
+              const found = await network.getFromPeer(peer, id);
+              if (found) { entry = found; source = peer.name; break; }
+            }
+          }
+
+          if (!entry) {
+            results.push({ ref: token, ok: false, error: 'Not found, or not shared publicly' });
+            continue;
+          }
+
+          if (entry.type === 'conversation' || Array.isArray(entry.messages)) {
+            const all = Array.isArray(entry.messages) ? entry.messages : [];
+            const content = all.slice(-60)
+              .map(m => `[${m.role}] ${String(m.text ?? '')}`)
+              .join('\n');
+            results.push({
+              ref: token, ok: true, type: 'conversation',
+              id: entry.id, title: entry.title ?? '(conversation)',
+              author: entry.author ?? source, messageCount: all.length,
+              tags: entry.tags ?? [],
+              content: content.slice(0, 12000),
+            });
+          } else {
+            results.push({
+              ref: token, ok: true, type: 'knowledge',
+              id: entry.id, title: entry.summary ?? '(knowledge)',
+              author: entry.author ?? source,
+              tags: entry.tags ?? [],
+              content: String(entry.content ?? '').slice(0, 12000),
+            });
+          }
+        }
+
+        const okCount = results.filter(r => r.ok).length;
+        return {
+          success: okCount > 0,
+          results,
+          count: results.length,
+          message: `📖 Loaded ${okCount}/${results.length} reference(s)`,
+        };
+      }
+    ));
+  }
+
+  //===== Prompt guidance for reference tokens =====
+  const systemPrompt = ctx.get('systemPrompt');
+  if (systemPrompt) {
+    ctx.effect(() => systemPrompt.section({
+      name: 'fish-school',
+      order: 90,
+      text: [
+        '# Fish school references',
+        'Knowledge is shared across DeepSeek Harness instances on this LAN.',
+        'A user message may contain reference tokens of the form `@<fish>/knowledge/<id>` or `@<fish>/conversation/<id>`.',
+        'When you see one, call `fish_school_read` with those tokens before answering, and never ask the user to paste the content.',
+        '`fish_school_query` and `fish_school_list` search the whole school, or one fish with `fishName`.',
+      ].join('\n'),
+    }));
+  }
+
+  //===== Skill =====
+  const skills = ctx.get('skills');
+  if (skills) {
+    const { id, name: fishName } = store.identity();
+    const peersCount = network.listPeers().length;
+    skills.register({
+      name: 'fish-school-knowledge',
+      description: 'Query and retrieve knowledge from the fish school network',
+      whenToUse: 'Use when you need shared knowledge from other team members or DSH instances on the same local network',
+      content: `# Fish School Knowledge Network
+
+This fish ("${fishName}", ID ${id}) is connected to ${peersCount} peer(s).
+
+## Available Tools
+
+- **fish_school_query**(query, tags?, type?, fishName?, limit?): Search across the network
+- **fish_school_list**(limit?, tags?, type?, fishName?): List recent entries from every fish
+- **fish_school_read**(refs, fishName?): Load the content behind '@fish/knowledge/id' or '@fish/conversation/id' tokens
+- **fish_school_publish**(summary, content, tags?): Share a knowledge file
+- **fish_school_share_conversation**(title, tags?, isPublic?): Share this conversation
+- **fish_school_get_conversation**(conversationId, fishName?): Load a shared conversation's full messages
+- **fish_school_find_knowledge**(fishName?, type?, limit?): Browse by author
+
+## Reference Examples
+
+A user message may carry a reference token; load it with fish_school_read:
+- fish_school_read(refs="@colleague-fish/knowledge/1794-1a2b3c4d")
+- fish_school_read(refs="@colleague-fish/conversation/1794-1a2b3c4d, @other-fish/knowledge/1794-5e6f7a8b")
+- fish_school_query(query="login tests", fishName="colleague-fish")
+- fish_school_list(type="conversation", limit=5)
+
+Storage: ${config.storageDir}
+`,
+      invocation: { modelInvocable: true, userInvocable: true },
+      provider: 'fish-school',
+    });
+  }
+
+  ctx.effect(() => () => {
+    logger.info('Fish School stopping...');
+    network.stop();
+  });
+
+  logger.info('Fish School started: %s, port %d', store.identity().name, config.port);
+}

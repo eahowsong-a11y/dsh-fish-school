@@ -1,0 +1,57 @@
+{
+  "meta": {
+    "title": "Fish school",
+    "description": "Share knowledge across DeepSeek Harness instances in the same local network"
+  },
+  "ui": {
+    "publishButton": "Publish knowledge",
+    "queryButton": "Query knowledge",
+    "publishModal": {
+      "title": "Publish knowledge to fish school",
+      "summary": "Summary",
+      "tags": "Tags",
+      "preview": "Preview",
+      "confirm": "Publish",
+      "cancel": "Cancel"
+    },
+    "queryModal": {
+      "title": "Query fish school knowledge",
+      "search": "Search keywords",
+      "results": "Results",
+      "close": "Close"
+    },
+    "toast": {
+      "published": "Knowledge published successfully",
+      "publishFailed": "Failed to publish knowledge",
+      "queryFailed": "Failed to query knowledge"
+    }
+  },
+  "tools": {
+    "fishSchoolPublish": {
+      "name": "fish_school_publish",
+      "description": "Summarize and publish knowledge to the fish school network for other instances to access",
+      "parameters": {
+        "summary": "Brief summary of the knowledge (required)",
+        "content": "Full content to publish (required)",
+        "tags": "Tags for categorization (comma-separated, optional)"
+      }
+    },
+    "fishSchoolQuery": {
+      "name": "fish_school_query",
+      "description": "Query knowledge from the fish school network using keywords or tags",
+      "parameters": {
+        "query": "Search keywords (required)",
+        "tags": "Filter by tags (comma-separated, optional)",
+        "limit": "Maximum number of results (default: 10)"
+      }
+    },
+    "fishSchoolList": {
+      "name": "fish_school_list",
+      "description": "List recent knowledge entries from the fish school network",
+      "parameters": {
+        "limit": "Maximum number of entries (default: 20)",
+        "tags": "Filter by tags (comma-separated, optional)"
+      }
+    }
+  }
+}

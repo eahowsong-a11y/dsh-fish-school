@@ -1,0 +1,57 @@
+{
+  "meta": {
+    "title": "鱼群",
+    "description": "在局域网内的 DeepSeek Harness 实例间共享知识"
+  },
+  "ui": {
+    "publishButton": "发布知识",
+    "queryButton": "查询知识",
+    "publishModal": {
+      "title": "发布知识到鱼群",
+      "summary": "摘要",
+      "tags": "标签",
+      "preview": "预览",
+      "confirm": "发布",
+      "cancel": "取消"
+    },
+    "queryModal": {
+      "title": "查询鱼群知识",
+      "search": "搜索关键词",
+      "results": "结果",
+      "close": "关闭"
+    },
+    "toast": {
+      "published": "知识发布成功",
+      "publishFailed": "知识发布失败",
+      "queryFailed": "知识查询失败"
+    }
+  },
+  "tools": {
+    "fishSchoolPublish": {
+      "name": "fish_school_publish",
+      "description": "总结并发布知识到鱼群网络，供其他实例访问",
+      "parameters": {
+        "summary": "知识的简要摘要（必填）",
+        "content": "要发布的完整内容（必填）",
+        "tags": "用于分类的标签（逗号分隔，可选）"
+      }
+    },
+    "fishSchoolQuery": {
+      "name": "fish_school_query",
+      "description": "使用关键词或标签从鱼群网络查询知识",
+      "parameters": {
+        "query": "搜索关键词（必填）",
+        "tags": "按标签过滤（逗号分隔，可选）",
+        "limit": "最大结果数（默认：10）"
+      }
+    },
+    "fishSchoolList": {
+      "name": "fish_school_list",
+      "description": "列出鱼群网络中的最近知识条目",
+      "parameters": {
+        "limit": "最大条目数（默认：20）",
+        "tags": "按标签过滤（逗号分隔，可选）"
+      }
+    }
+  }
+}
