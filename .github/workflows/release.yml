@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: |
+          node --check index.js
+          node --check lib/network.js
+          node --check lib/store.js
+      - run: |
+          VERSION=$(jq -r '.version' package.json)
+          npm pack --pack-destination=dist/
+          mv dist/local-fish-school-*.tgz dist/fish-$VERSION.tgz
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+      - uses: softprops/action-gh-release@v1
+        with:
+          files: dist/fish-*.tgz
+          generate_release_notes: true
+          body: |
+            # Fish School v${{ env.VERSION }}
+
+            ## Update Instructions
+
+            ### Quick (Windows PowerShell)
+            ```powershell
+            .\update-local.ps1
+            ```
+
+            ### Manual
+            1. Download `fish-${{ env.VERSION }}.tgz`
+            2. Save to `C:\harper\fish.tgz`
+            3. Run: `cd $env:USERPROFILE\.dsh\profiles\desktop && pnpm install`
+            4. Refresh DSH (Ctrl+R)
+
+            ## What's New
+            See commit log for details.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
