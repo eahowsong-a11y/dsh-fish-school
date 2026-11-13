@@ -6,3 +6,4 @@
         multicastAddress: '239.255.37.77'
         storageDir: ''
         deviceName: ''
+        updateRepo: 'eahowsong-a11y/dsh-fish-school'

@@ -2,7 +2,7 @@
 
 局域网内多个 DeepSeek Harness 实例之间共享知识：把对话或资料发布到本机的「公共文件夹」，同一局域网里的其他鱼可以检索、引用，直接放进自己的对话上下文。
 
-- 版本：1.1.0
+- 版本：以 `package.json` 为准（插件页顶部徽标与面板「我的鱼 → 版本」都读它，本文件不再硬编码）
 - 依赖：无第三方依赖，只用 Node.js 内置模块
 - 平台：DSH Web（桌面版 / 浏览器版均可）
 
@@ -205,6 +205,15 @@ New-NetFirewallRule -DisplayName "DSH Fish School TCP" -Direction Inbound -Proto
 **对方改了名字但我这边还是旧的**：名字随心跳广播，最多 15 秒刷新；面板每 5 秒拉一次状态。
 
 ## 变更记录
+
+**1.6.0** — 面板显示当前版本与可更新版本
+
+DSH 插件页只能显示 `package.json` 里的版本徽标，对 `file:` 本地依赖也无法检查上游更新，所以这块由插件自己承担：
+
+- `/fish-school/v1/status` 增加 `version` 与 `updateRepo`；
+- 新增 `/fish-school/v1/check-update`：查 GitHub 最新 release，返回 `current` / `latest` / `hasUpdate` / `releaseUrl` / `assetUrl`，成功结果缓存 10 分钟，`?refresh=1` 可强制刷新；失败以 `error` 字段返回数据，不会让面板报错；
+- 面板「我的鱼」卡片新增版本格子与一行更新提示：有新版时高亮并给出 Release 链接，正常时显示「已是最新」，失败时显示原因；旁边有「检查」按钮；
+- README 里硬编码的「版本：1.1.0」已移除（一直没跟着发版更新），版本一律读 `package.json`。
 
 **1.5.0** — 面板知识库合并远端条目
 

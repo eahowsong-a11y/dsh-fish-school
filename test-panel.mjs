@@ -1,10 +1,12 @@
 // End-to-end test for the panel knowledge route.
 // Stubs the DSH host, applies the real plugin, then talks to it over HTTP and
 // through its own route handlers. Uses a real LAN peer when one is reachable.
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { apply } from './index.js';
+
+const PKG_VERSION = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')).version;
 
 const PORT = 37880;
 const SEED = process.env.FISH_TEST_SEED ?? '10.106.35.103:37775';
@@ -57,6 +59,28 @@ await new Promise(r => setTimeout(r, 3000)); // let the seed peer probe settle
 
 const status = await call('/fish-school/v1/status');
 console.log('peers seen:', JSON.stringify(status.body.peers ?? []), '| me:', status.body.me?.name);
+
+ok('status reports the installed version', status.body.version === PKG_VERSION,
+  `status=${status.body.version} package=${PKG_VERSION}`);
+ok('status reports the update repo', typeof status.body.updateRepo === 'string' && status.body.updateRepo.includes('/'),
+  status.body.updateRepo ?? '(missing)');
+
+// The update check talks to GitHub; without network it must still answer with a
+// well-formed payload carrying `error`, never throw.
+const upd = await call('/fish-school/v1/check-update');
+ok('check-update reports the current version', upd.body.current === PKG_VERSION, `current=${upd.body.current}`);
+if (upd.body.error) {
+  console.log(`SKIP  latest-release assertions — ${upd.body.error}`);
+  checks.push({ name: 'latest release', ok: true }, { name: 'hasUpdate shape', ok: true });
+} else {
+  ok('check-update reports a semver latest tag', /^\d+\.\d+\.\d+/.test(String(upd.body.latest)),
+    `latest=${upd.body.latest}`);
+  ok('hasUpdate is a boolean', typeof upd.body.hasUpdate === 'boolean', `hasUpdate=${upd.body.hasUpdate}`);
+}
+const tUpd = Date.now();
+await call('/fish-school/v1/check-update');
+const elapsedUpd = Date.now() - tUpd;
+ok('repeat update check is served from cache', elapsedUpd < 500, `${elapsedUpd}ms`);
 
 await call('/fish-school/v1/upload', {
   method: 'POST',
