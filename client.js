@@ -38,6 +38,10 @@ window.__ModuleLoader__.load({
         menuShare: 'Share this conversation as-is', menuShareDesc: 'publish the full transcript, public or private',
         shareFieldTitle: 'Title', sharePublic: 'Public to the school', shareGo: 'Share',
         noSession: 'No conversation selected yet',
+        settingsSubtitle: 'Show version and settings for Fish school.',
+        sidebarEntry: 'Sidebar entry', sidebarEntryHint: 'Show Fish school under "Plugins" in the sidebar. The entry in Settings stays either way.',
+        show: 'Show', hide: 'Hide',
+        sidebarSaveFailed: 'Could not save: {e}',
         summarizePrompt: 'Summarize our conversation so far and publish it to the fish school:\n1) write 5-10 bullets covering the conclusions, decisions and reusable practices;\n2) then call fish_school_publish with a one-line summary, the full bullets as content, and comma-separated tags.',
       },
       zh: {
@@ -69,11 +73,19 @@ window.__ModuleLoader__.load({
         menuShare: '上传本次对话原文', menuShareDesc: '直接分享完整对话，可设公开/私有',
         shareFieldTitle: '标题', sharePublic: '公开给鱼群', shareGo: '上传',
         noSession: '还没有选中对话',
+        settingsSubtitle: '查看鱼群版本与设置。',
+        sidebarEntry: '侧栏入口', sidebarEntryHint: '在侧栏「插件」下方显示鱼群。设置里的入口不变。',
+        show: '显示', hide: '不显示',
+        sidebarSaveFailed: '保存失败：{e}',
         summarizePrompt: '请总结我们刚才这段对话并发布到鱼群：\n1) 用 5-10 条要点写出结论、决策和可复用的做法；\n2) 然后调用 fish_school_publish 发布，summary 写一句话标题，content 放完整要点，tags 用逗号分隔。',
       },
     };
 
     const S = {
+      activeBtn: {
+        background: 'var(--dsw-alias-bg-layer-2)', color: 'var(--dsw-alias-label-primary)',
+        borderColor: 'var(--dsw-alias-border-l2)',
+      },
       page: { height: '100%', overflow: 'auto', padding: '28px 32px', boxSizing: 'border-box',
         color: 'var(--dsw-alias-label-primary)', background: 'var(--dsw-alias-bg-base)' },
       card: { background: 'var(--dsw-alias-bg-layer-1)', border: '1px solid var(--dsw-alias-border-l1)',
@@ -129,6 +141,78 @@ window.__ModuleLoader__.load({
 
     // Current vs published version. DSH shows the package badge but cannot check a
     // `file:` dependency for updates, so the panel reports it here.
+    const activeBtn = S.activeBtn;
+
+    // A slot registration can be retracted with the disposer `slots.register` returns.
+    // That is what makes the sidebar entry switchable without a page reload: hiding it
+    // calls the disposer, showing it registers again. Nothing is torn down until the
+    // slot the entry belongs to actually exists, hence `available()`.
+    function createGate(register, initiallyVisible = true) {
+      let ready = false;
+      let wanted = initiallyVisible;
+      let retracted = false;
+      let dispose = null;
+      const apply = () => {
+        if (!ready) return;
+        const shouldShow = wanted && !retracted;
+        if (shouldShow && dispose === null) {
+          const off = register();
+          dispose = typeof off === 'function' ? off : () => {};
+          return;
+        }
+        if (!shouldShow && dispose !== null) {
+          const stop = dispose;
+          dispose = null;
+          stop();
+        }
+      };
+      return {
+        available: () => { ready = true; apply(); },
+        setVisible: (visible) => { wanted = Boolean(visible); apply(); },
+        visible: () => dispose !== null,
+        retire: () => { retracted = true; apply(); },
+      };
+    }
+
+    // The Fish school card on DSH's plugin settings page. Mirrors the market's own
+    // card: version on top, then the sidebar switch.
+    function SettingsCard({ t, status, update, onCheck, sidebar, onToggleSidebar }) {
+      const on = sidebar.enabled;
+      return h('div', { style: { ...S.card, marginBottom: 0 } },
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 } },
+          h('span', { style: { fontWeight: 600, fontSize: 14 } }, t('title')),
+          h('span', { style: { ...S.muted, fontVariantNumeric: 'tabular-nums' } },
+            'v' + (status.version ?? '?')),
+        ),
+        h('div', { style: S.muted }, t('settingsSubtitle')),
+        h(VersionNotice, { t, status, update, onCheck }),
+        h('div', {
+          style: { display: 'flex', alignItems: 'flex-start', gap: 12, marginTop: 14, paddingTop: 12,
+            borderTop: '1px solid var(--dsw-alias-border-l1)' },
+        },
+          h('div', { style: { flex: 1, minWidth: 0 } },
+            h('div', { style: { fontSize: 13, marginBottom: 3 } }, t('sidebarEntry')),
+            h('div', { style: S.muted }, t('sidebarEntryHint')),
+            sidebar.error && h('div', {
+              style: { fontSize: 11.5, marginTop: 4, color: 'var(--dsw-alias-state-error-primary)' },
+            }, t('sidebarSaveFailed', { e: sidebar.error })),
+          ),
+          h('div', { style: { display: 'flex', gap: 4, flexShrink: 0 } },
+            h('button', {
+              type: 'button', disabled: sidebar.busy,
+              onClick: () => onToggleSidebar(false),
+              style: { ...S.btn, fontSize: 12, ...(on ? {} : activeBtn) },
+            }, t('hide')),
+            h('button', {
+              type: 'button', disabled: sidebar.busy,
+              onClick: () => onToggleSidebar(true),
+              style: { ...S.btn, fontSize: 12, ...(on ? activeBtn : {}) },
+            }, t('show')),
+          ),
+        ),
+      );
+    }
+
     function VersionNotice({ t, status, update, onCheck }) {
       const d = update.data;
       const busy = update.busy;
@@ -834,13 +918,114 @@ window.__ModuleLoader__.load({
           )
         );
 
-        ctx.slots.inject('sidebar.panellist', () =>
-          ctx.slots.register({ name: 'sidebar.panellist', id: NS, order: 15, label: () => t('title') },
-            props => h(Icon, props))
-        );
+        // The sidebar icon and its panel are registered as a pair and retracted as a
+        // pair. Selecting the panel while its row is gone would leave a blank page, so
+        // hiding also deselects it — the same thing the market does.
+        let layout = null;
+        ctx.inject?.(['layout'], (scoped) => { layout = scoped.layout; });
 
-        ctx.slots.inject('main', () =>
-          ctx.slots.register({ name: 'main', key: NS }, () => h(Panel, { t }))
+        // Starts hidden and mounts only once the stored preference is known, so a
+        // user who turned the entry off never sees it flash on refresh.
+        const sidebarGate = createGate(() => {
+          const offRow = ctx.slots.register(
+            { name: 'sidebar.panellist', id: NS, order: 15, label: () => t('title') },
+            props => h(Icon, props));
+          const offPanel = ctx.slots.register(
+            { name: 'main', key: NS }, () => h(Panel, { t }));
+          return () => {
+            try {
+              if (layout?.panelInfo?.getSnapshot?.().activePanelId === NS) layout.selectPanel(null);
+            } catch { /* layout is optional */ }
+            if (typeof offRow === 'function') offRow();
+            if (typeof offPanel === 'function') offPanel();
+          };
+        }, false);
+
+        const state = { enabled: true, busy: false, error: null };
+        const listeners = new Set();
+        const emit = () => { for (const fn of listeners) fn(); };
+        const subscribe = (fn) => { listeners.add(fn); return () => listeners.delete(fn); };
+        const snapshot = () => ({ ...state });
+
+        function applySidebar(enabled) {
+          state.enabled = Boolean(enabled);
+          sidebarGate.setVisible(state.enabled);
+          emit();
+        }
+
+        async function loadSettings() {
+          try {
+            const settings = await api('/settings');
+            applySidebar(settings.sidebarEnabled !== false);
+          } catch (err) {
+            // A settings failure must not hide the plugin: fall back to showing it.
+            console.warn('[fish-school] cannot read settings, showing the sidebar entry:', err.message);
+            applySidebar(true);
+          }
+        }
+
+        async function setSidebar(enabled) {
+          state.busy = true; state.error = null; emit();
+          const previous = state.enabled;
+          applySidebar(enabled);
+          try {
+            const saved = await api('/settings', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ sidebarEnabled: Boolean(enabled) }),
+            });
+            applySidebar(saved.sidebarEnabled !== false);
+          } catch (err) {
+            state.error = err.message;
+            applySidebar(previous);
+          } finally {
+            state.busy = false; emit();
+          }
+        }
+
+        // Waits for the slot to exist before mounting anything; the wanted visibility
+        // from loadSettings() is already stored, so ordering does not matter.
+        ctx.slots.inject('sidebar.panellist', () => sidebarGate.available());
+        loadSettings();
+
+        // GET /status also carries sidebarEnabled, so a page that only has the settings
+        // card still shows the switch in the right position.
+        function SettingsSection() {
+          const [snap, setSnap] = useState(snapshot);
+          const [status, setStatus] = useState({ version: null, updateRepo: null });
+          const [update, setUpdate] = useState({ data: null, busy: false, error: null });
+          useEffect(() => {
+            const off = subscribe(() => setSnap(snapshot()));
+            return off;
+          }, []);
+          useEffect(() => {
+            let alive = true;
+            api('/status').then(s => { if (alive) setStatus(s); }).catch(() => {});
+            return () => { alive = false; };
+          }, []);
+          const check = useCallback(async (refresh = false) => {
+            setUpdate(u => ({ ...u, busy: true, error: null }));
+            try {
+              const data = await api('/check-update' + (refresh ? '?refresh=1' : ''));
+              setUpdate({ data, busy: false, error: data.error ?? null });
+            } catch (err) {
+              setUpdate({ data: null, busy: false, error: err.message });
+            }
+          }, []);
+          useEffect(() => { check(false); }, [check]);
+          return h(SettingsCard, {
+            t, status, update,
+            onCheck: () => check(true),
+            sidebar: snap,
+            onToggleSidebar: (enabled) => { setSidebar(enabled); },
+          });
+        }
+
+        ctx.slots.inject('settings.section', () =>
+          ctx.slots.register({
+            name: 'settings.section', id: NS, order: 45, label: () => t('title'), locale: NS,
+            inject: () => ({ t }),
+          }, () => h(SettingsSection, null))
         );
       },
     };
