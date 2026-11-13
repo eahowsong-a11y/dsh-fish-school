@@ -134,6 +134,7 @@ export function apply(ctx, config = {}) {
             storageDir: config.storageDir,
             knowledgeCount: store.all().length,
             peers: network.listPeers(),
+            interfaces: network.interfaces(),
           });
         } catch (err) { return send(res, 500, { error: err.message }); }
       },

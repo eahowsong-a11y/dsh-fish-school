@@ -126,7 +126,20 @@ $DSH_PROFILE_DIR/fish-school/
 
 **同一台机器起两个 DSH 实例**：第二个会因 37775 被占用而注册失败，改一个 `port`。
 
-**互相看不见**：`setMulticastTTL(1)` 限制在本网段；公司 AP 开了「客户端隔离」或不同 VLAN 时组播过不去，此时互相看不见，但本机知识仍然可用。
+**互相看不见**，按顺序排查：
+
+1. **防火墙**（最常见）。以管理员身份运行 PowerShell，两台机器都要：
+
+```powershell
+New-NetFirewallRule -DisplayName "DSH Fish School UDP" -Direction Inbound -Protocol UDP -LocalPort 37776 -Action Allow
+New-NetFirewallRule -DisplayName "DSH Fish School TCP" -Direction Inbound -Protocol TCP -LocalPort 37775 -Action Allow
+```
+
+2. **多网卡**（1.1.1 起自动处理）。Windows 默认用 metric 最低的网卡收发组播；装了 WSL / Hyper-V / VPN 时那个"最低"往往是虚拟网卡，公告就发进了虚拟网段。1.1.1 会在每个可用网卡上加入组播并按网卡逐个发送。旧版本请升级。面板「我的鱼」下面那行 `LAN:` 会显示实际加入的网卡地址，显示「未加入组播」就是没成功。
+
+3. **网段/隔离**：`setMulticastTTL(1)` 限制在本网段；不同 VLAN 或 AP 开了「客户端隔离」时组播过不去，此时互相看不见，但本机知识仍然可用。
+
+4. 两边必须都**重启过 DSH**，插件才算真正跑起来。
 
 **重启后打不开面板**：1.1.0 已修（启动顺序）。若仍出现，检查 Host 日志里有没有 `webServer/connection unavailable`。
 

@@ -217,7 +217,12 @@ window.__ModuleLoader__.load({
                 h('div', { style: { width: 40, height: 40, borderRadius: '50%', background: 'var(--dsw-alias-brand-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 } }, '🐟'),
                 h('div', null,
                   h('div', { style: { fontWeight: 600, marginBottom: 2 } }, status.me.name, ' ', h('span', { style: S.muted }, '(', t('you'), ')')),
-                  h('div', { style: { fontSize: 11, ...S.muted } }, status.me.id.slice(0, 13), '…')
+                  h('div', { style: { fontSize: 11, ...S.muted } }, status.me.id.slice(0, 13), '…'),
+                  status.interfaces?.length
+                    ? h('div', { style: { fontSize: 10.5, ...S.muted, marginTop: 2 } },
+                        'LAN: ', status.interfaces.join(', '))
+                    : h('div', { style: { fontSize: 10.5, color: 'var(--dsw-alias-state-warn-primary)', marginTop: 2 } },
+                        'LAN: 未加入组播')
                 )
               ),
           h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 12 } },
