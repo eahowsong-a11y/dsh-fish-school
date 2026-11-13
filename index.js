@@ -72,10 +72,17 @@ export function apply(ctx, config = {}) {
   config.port = config.port ?? 37775;
   config.multicastAddress = config.multicastAddress ?? '239.255.37.77';
   config.storageDir = config.storageDir || join(process.env.DSH_PROFILE_DIR || '.', 'fish-school');
+  config.autoScan = config.autoScan !== false;
+  config.peerAddresses = Array.isArray(config.peerAddresses) ? config.peerAddresses : [];
 
   const logger = ctx.logger('fish-school');
   const store = createStore(config.storageDir);
   const network = startNetwork({ store, config, logger });
+
+  for (const address of config.peerAddresses) {
+    network.remember(address, 'manual')
+      .catch(err => logger.warn('seed peer %s: %s', address, err.message));
+  }
 
   /**
    * Extract conversation messages from a live session using the official API.
@@ -246,8 +253,7 @@ export function apply(ctx, config = {}) {
 
     // POST /fish-school/v1/share-session — publish the current transcript without an LLM round trip
     ctx.effect(() => webServer.register({
-      kind: 'exact', path: '/fish-school/v1/share-session',
-      async handler(req, res) {
+      kind: 'exact', path: '/fish-school/v1/share-session',      async handler(req, res) {
         const rejection = connection.requestRejection({ headers: req.headers });
         if (rejection) return send(res, rejection, { error: 'unauthorized' });
         if (req.method !== 'POST') return send(res, 405, { error: 'method not allowed' });
@@ -277,6 +283,54 @@ export function apply(ctx, config = {}) {
             entry: { id: entry.id, title: entry.title, messageCount: messages.length, isPublic: entry.isPublic },
           });
         } catch (err) { return send(res, 400, { error: err.message }); }
+      },
+    }));
+
+    // POST /fish-school/v1/add-peer — remember an address and verify it now
+    ctx.effect(() => webServer.register({
+      kind: 'exact', path: '/fish-school/v1/add-peer',
+      async handler(req, res) {
+        const rejection = connection.requestRejection({ headers: req.headers });
+        if (rejection) return send(res, rejection, { error: 'unauthorized' });
+        if (req.method !== 'POST') return send(res, 405, { error: 'method not allowed' });
+        try {
+          let raw = '';
+          for await (const chunk of req) { raw += chunk; if (raw.length > 4096) throw new Error('Body too large'); }
+          const { address } = JSON.parse(raw || '{}');
+          const result = await network.remember(address, 'manual');
+          if (!result.ok) return send(res, 404, { error: `No fish answered at ${address}` });
+          return send(res, 200, result);
+        } catch (err) { return send(res, 400, { error: err.message }); }
+      },
+    }));
+
+    // POST /fish-school/v1/remove-peer
+    ctx.effect(() => webServer.register({
+      kind: 'exact', path: '/fish-school/v1/remove-peer',
+      async handler(req, res) {
+        const rejection = connection.requestRejection({ headers: req.headers });
+        if (rejection) return send(res, rejection, { error: 'unauthorized' });
+        if (req.method !== 'POST') return send(res, 405, { error: 'method not allowed' });
+        try {
+          let raw = '';
+          for await (const chunk of req) { raw += chunk; if (raw.length > 4096) throw new Error('Body too large'); }
+          await network.forget(JSON.parse(raw || '{}').address);
+          return send(res, 200, { peers: network.listPeers() });
+        } catch (err) { return send(res, 400, { error: err.message }); }
+      },
+    }));
+
+    // POST /fish-school/v1/scan — sweep this host's /24s, no multicast needed
+    ctx.effect(() => webServer.register({
+      kind: 'exact', path: '/fish-school/v1/scan',
+      async handler(req, res) {
+        const rejection = connection.requestRejection({ headers: req.headers });
+        if (rejection) return send(res, rejection, { error: 'unauthorized' });
+        if (req.method !== 'POST') return send(res, 405, { error: 'method not allowed' });
+        try {
+          const found = await network.scan();
+          return send(res, 200, { found, peers: network.listPeers() });
+        } catch (err) { return send(res, 500, { error: err.message }); }
       },
     }));
   }
@@ -554,6 +608,23 @@ export function apply(ctx, config = {}) {
           results,
           count: results.length,
           message: `📖 Loaded ${okCount}/${results.length} reference(s)`,
+        };
+      }
+    ));
+
+    tools.register(toolDef(
+      'fish_school_peers',
+      'List the fish currently reachable on this LAN, with their addresses',
+      { properties: {} },
+      async () => {
+        const peers = network.listPeers();
+        return {
+          success: true,
+          peers,
+          count: peers.length,
+          message: peers.length
+            ? peers.map(p => `🐟 ${p.name} — ${p.address}:${p.port}${p.online === false ? ' (offline)' : ''}`).join('\n')
+            : 'No fish reachable yet.',
         };
       }
     ));

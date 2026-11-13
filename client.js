@@ -11,7 +11,9 @@ window.__ModuleLoader__.load({
     const DICTS = {
       en: {
         title: 'Fish school', subtitle: 'Share knowledge across DeepSeek Harness instances on this network',
-        me: 'My fish', you: 'You', peers: 'Fish in the school', noPeers: 'No other fish found yet. Enable Fish school on other machines on the same network.',
+        me: 'My fish', you: 'You', peers: 'Fish in the school', noPeers: 'No other fish found yet. Add one by IP, or scan the LAN.',
+        peerAddrHint: 'IP or IP:port', peerAdd: 'Add fish', peerScan: 'Scan LAN', peerScanning: 'Scanning…',
+        peerAdded: 'Added {name}', peerFound: 'Found {n} fish', peerNone: 'No fish found on this subnet', peerRemove: 'Remove',
         rename: 'Rename', save: 'Save', cancel: 'Cancel', saving: 'Saving…', nameHint: '1–40 characters',
         knowledge: 'Knowledge library', noKnowledge: 'Nothing published yet.',
         tabAll: 'All', tabFiles: 'Files', tabConv: 'Conversations',
@@ -38,7 +40,9 @@ window.__ModuleLoader__.load({
       },
       zh: {
         title: '鱼群', subtitle: '在局域网内的 DeepSeek Harness 实例间共享知识',
-        me: '我的鱼', you: '我', peers: '鱼群成员', noPeers: '还没有发现其他鱼。在同一局域网的其他机器上启用鱼群插件后会出现在这里。',
+        me: '我的鱼', you: '我', peers: '鱼群成员', noPeers: '还没有发现其他鱼。可以填 IP 添加，或扫描局域网。',
+        peerAddrHint: 'IP 或 IP:端口', peerAdd: '添加鱼', peerScan: '扫描局域网', peerScanning: '扫描中…',
+        peerAdded: '已添加 {name}', peerFound: '找到 {n} 条鱼', peerNone: '本网段没找到鱼', peerRemove: '移除',
         rename: '改名', save: '保存', cancel: '取消', saving: '保存中…', nameHint: '1–40 个字符',
         knowledge: '知识库', noKnowledge: '还没有发布任何知识。',
         tabAll: '全部', tabFiles: '文件', tabConv: '对话',
@@ -278,6 +282,10 @@ window.__ModuleLoader__.load({
       const [draft, setDraft] = useState('');
       const [saving, setSaving] = useState(false);
       const [tab, setTab] = useState('all');
+      const [adding, setAdding] = useState(false);
+      const [addAddr, setAddAddr] = useState('');
+      const [peerBusy, setPeerBusy] = useState(false);
+      const [peerNote, setPeerNote] = useState('');
 
       const rename = useCallback(async () => {
         setSaving(true);
@@ -307,6 +315,46 @@ window.__ModuleLoader__.load({
           setState(prev => ({ ...prev, entries: prev.entries.map(e => e.id === id ? { ...e, isPublic } : e) }));
         } catch (err) { alert(err.message); }
       }, [setState]);
+
+      const addPeer = useCallback(async () => {
+        const address = addAddr.trim();
+        if (!address) return;
+        setPeerBusy(true); setPeerNote('');
+        try {
+          const { peer } = await api('/add-peer', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ address }),
+          });
+          setPeerNote(t('peerAdded', { name: peer.name ?? address }));
+          setAddAddr(''); setAdding(false);
+          refresh();
+        } catch (err) { setPeerNote(err.message); }
+        finally { setPeerBusy(false); }
+      }, [addAddr, refresh, t]);
+
+      const scanLan = useCallback(async () => {
+        setPeerBusy(true); setPeerNote('');
+        try {
+          const { found } = await api('/scan', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+          });
+          setPeerNote(found.length ? t('peerFound', { n: found.length }) : t('peerNone'));
+          refresh();
+        } catch (err) { setPeerNote(err.message); }
+        finally { setPeerBusy(false); }
+      }, [refresh, t]);
+
+      const removePeer = useCallback(async (address) => {
+        setPeerBusy(true); setPeerNote('');
+        try {
+          await api('/remove-peer', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ address }),
+          });
+          refresh();
+        } catch (err) { setPeerNote(err.message); }
+        finally { setPeerBusy(false); }
+      }, [refresh]);
 
       useEffect(() => { if (status?.me) setDraft(status.me.name); }, [status]);
 
@@ -388,16 +436,57 @@ window.__ModuleLoader__.load({
 
         // Peers card
         h('div', { style: S.card },
-          h('h2', { style: S.h2 }, t('peers'), ' (', status.peers.length, ')'),
+          h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, gap: 8 } },
+            h('h2', { style: { ...S.h2, margin: 0 } }, t('peers'), ' (', status.peers.length, ')'),
+            h('div', { style: { display: 'flex', gap: 6, flexShrink: 0 } },
+              h('button', { style: S.btn, disabled: peerBusy, onClick: scanLan },
+                peerBusy ? t('peerScanning') : t('peerScan')),
+              h('button', {
+                style: S.btn, disabled: peerBusy,
+                onClick: () => { setAdding(v => !v); setPeerNote(''); },
+              }, t('peerAdd'))
+            )
+          ),
+
+          adding ? h('div', { style: { display: 'flex', gap: 6, marginBottom: 10 } },
+            h('input', {
+              style: S.input, value: addAddr, autoFocus: true, placeholder: t('peerAddrHint'),
+              onChange: e => setAddAddr(e.target.value),
+              onKeyDown: e => {
+                if (e.key === 'Enter') addPeer();
+                if (e.key === 'Escape') setAdding(false);
+              },
+            }),
+            h('button', {
+              style: { ...S.btn, background: 'var(--dsw-alias-brand-primary)', color: '#fff', border: 'none' },
+              disabled: peerBusy || !addAddr.trim(), onClick: addPeer,
+            }, t('save')),
+            h('button', { style: S.btn, onClick: () => setAdding(false) }, t('cancel'))
+          ) : null,
+
+          peerNote
+            ? h('div', { style: { fontSize: 11.5, ...S.muted, marginBottom: 8 } }, peerNote)
+            : null,
+
           status.peers.length
             ? h('div', null, status.peers.map(peer =>
                 h('div', { key: peer.id, style: { display: 'flex', alignItems: 'center', gap: 10, padding: 8, background: 'var(--dsw-alias-bg-layer-2)', borderRadius: 8, marginBottom: 8 } },
-                  h('div', { style: { width: 32, height: 32, borderRadius: '50%', background: 'var(--dsw-alias-state-success-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16 } }, '🐟'),
-                  h('div', { style: { flex: 1 } },
+                  h('div', {
+                    style: {
+                      width: 32, height: 32, borderRadius: '50%', display: 'flex', alignItems: 'center',
+                      justifyContent: 'center', fontSize: 16,
+                      background: peer.online === false ? 'var(--dsw-alias-state-idle-primary)' : 'var(--dsw-alias-state-success-primary)',
+                    },
+                  }, '🐟'),
+                  h('div', { style: { flex: 1, minWidth: 0 } },
                     h('div', { style: { fontWeight: 600, fontSize: 13 } }, peer.name),
-                    h('div', { style: { fontSize: 11, ...S.muted } }, peer.address, ':', peer.port)
+                    h('div', { style: { fontSize: 11, ...S.muted } },
+                      peer.address, ':', peer.port, peer.source ? ` · ${peer.source}` : '')
                   ),
-                  h('div', { style: { fontSize: 10, color: 'var(--dsw-alias-state-success-primary)' } }, t('online'))
+                  h('button', {
+                    style: S.btnSmall, disabled: peerBusy,
+                    onClick: () => removePeer(peer.address),
+                  }, t('peerRemove'))
                 )
               ))
             : h('div', { style: { padding: 20, textAlign: 'center', ...S.muted } }, t('noPeers'))

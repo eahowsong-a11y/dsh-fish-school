@@ -10,7 +10,9 @@
 
 | 能力 | 说明 |
 |---|---|
-| 自动发现 | UDP 组播 `239.255.37.77:37776`，15 秒心跳，45 秒无心跳判定离线，TTL=1 不出网段 |
+| 自动发现 | 双通道：UDP 组播 `239.255.37.77:37776`（快速、自动，但 Wi-Fi 常丢）+ **单播 HTTP 探活**（每 20 秒问一次 `/hello`，20 秒一次，3 次失败才移除） |
+| 手动添加 | 面板「鱼群成员」里填 `IP` 或 `IP:端口` 直接加一条鱼，也可以一键「扫描局域网」扫本机 /24 |
+| 地址簿 | 学到的地址写进 `peers.json`，重启后先探活再扫网段，不再依赖组播 |
 | 两类共享内容 | 文件型知识（`knowledge`）与对话型（`conversation`，带完整消息） |
 | 隐私 | 每条对话可设公开 / 私有；私有的不会出现在局域网接口里，只有本人面板可见 |
 | 手动管理 | 面板里可改名、删除条目、切换公开状态 |
@@ -31,6 +33,7 @@
 | `fish_school_read(refs, fishName?)` | 按 `@鱼/knowledge/<id>` 或 `@鱼/conversation/<id>` 取正文 |
 | `fish_school_get_conversation(conversationId, fishName?)` | 取一条已分享对话的完整消息 |
 | `fish_school_find_knowledge(fishName?, type?, limit?)` | 按作者浏览 |
+| `fish_school_peers()` | 列出当前可达的鱼及其地址 |
 
 另注册技能 `fish-school-knowledge`，内含使用说明。
 
@@ -39,7 +42,7 @@
 - **侧栏 🐟**：鱼群面板
   - 我的鱼：改名、看已加入的组播网卡（`LAN:` 那行）、条目数与端口
   - 知识库：上传区（选择或拖入文本文件）+ 全部 / 文件 / 对话三个标签页；自己的条目可删除、可切换公开状态；点条目名展开引用串
-  - 鱼群成员：在线鱼列表
+  - 鱼群成员：在线鱼列表，可「添加鱼」填 IP、「扫描局域网」、逐条「移除」；每条显示来源（multicast / manual / scan / saved）
 - **输入框左侧 🐟**：三选一菜单
   - 引用知识或对话 → 插入 `@鱼/类型/id`
   - 总结本次对话并发布 → 插入总结指令，由 Agent 总结并调用 `fish_school_publish`
@@ -120,6 +123,8 @@ plugin_manager(action="install_bundle", target="@yourteam/fish-school@1.1.0", en
         port: 37775                  # 局域网 HTTP 端口
         multicastAddress: '239.255.37.77'
         storageDir: ''               # 空 = $DSH_PROFILE_DIR/fish-school
+        autoScan: true               # 启动后自动扫一次本网段
+        peerAddresses: []            # 固定要连的地址，如 ['10.106.35.69']
 ```
 
 数据落盘位置（默认）：
@@ -137,18 +142,20 @@ $DSH_PROFILE_DIR/fish-school/
 
 **互相看不见**，按顺序排查：
 
-1. **防火墙**（最常见）。以管理员身份运行 PowerShell，两台机器都要：
+1. **先看 HTTP 通不通**。1.3.0 起发现不再只靠组播：每 20 秒对地址簿里的鱼发一次 `GET /hello`。打开面板 → 鱼群成员 → 「扫描局域网」，能扫到就说明 TCP 通路正常，问题只在组播。
+
+2. **防火墙**。两台机器都要放行（管理员 PowerShell）：
 
 ```powershell
 New-NetFirewallRule -DisplayName "DSH Fish School UDP" -Direction Inbound -Protocol UDP -LocalPort 37776 -Action Allow
 New-NetFirewallRule -DisplayName "DSH Fish School TCP" -Direction Inbound -Protocol TCP -LocalPort 37775 -Action Allow
 ```
 
-2. **多网卡**（1.1.1 起自动处理）。Windows 默认用 metric 最低的网卡收发组播；装了 WSL / Hyper-V / VPN 时那个"最低"往往是虚拟网卡，公告就发进了虚拟网段。1.1.1 会在每个可用网卡上加入组播并按网卡逐个发送。旧版本请升级。面板「我的鱼」下面那行 `LAN:` 会显示实际加入的网卡地址，显示「未加入组播」就是没成功。
+3. **多网卡**（1.1.1 起自动处理）。Windows 默认用 metric 最低的网卡收发组播；装了 WSL / Hyper-V / VPN 时那个"最低"往往是虚拟网卡。面板「我的鱼」下面 `LAN:` 那行显示实际加入的网卡地址，显示「未加入组播」就是没成功。
 
-3. **网段/隔离**：`setMulticastTTL(1)` 限制在本网段；不同 VLAN 或 AP 开了「客户端隔离」时组播过不去，此时互相看不见，但本机知识仍然可用。
+4. **组播被 AP 丢掉**。企业 Wi-Fi 经常不转发组播，或开了客户端隔离。这种情况组播永远不通，但单播 HTTP 通常没事 —— 用「添加鱼」填对方 IP，或「扫描局域网」，之后靠探活维持。
 
-4. 两边必须都**重启过 DSH**，插件才算真正跑起来。
+5. 两边必须都**重启过 DSH**，插件才算真正跑起来。
 
 **重启后打不开面板**：1.1.0 已修（启动顺序）。若仍出现，检查 Host 日志里有没有 `webServer/connection unavailable`。
 
