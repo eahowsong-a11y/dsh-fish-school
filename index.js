@@ -3,6 +3,7 @@
  */
 
 import { join } from 'node:path';
+import { readFileSync } from 'node:fs';
 import { createStore } from './lib/store.js';
 import { startNetwork } from './lib/network.js';
 
@@ -14,6 +15,26 @@ export const inject = ['webServer', 'connection'];
 
 // How long the panel reuses a peer scan before asking the school again.
 const PANEL_REMOTE_TTL_MS = 8000;
+
+// The real installed version: package.json is the single source of truth, so the
+// panel can never drift from what npm packed (README used to hardcode it).
+const PKG = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'));
+const CURRENT_VERSION = String(PKG.version ?? '0.0.0');
+
+// How long a successful "latest release" answer stays fresh.
+const UPDATE_TTL_MS = 10 * 60 * 1000;
+
+/** Compare dotted versions numerically; enough for x.y.z tags. */
+function isNewer(candidate, current) {
+  const a = String(candidate).split('.').map(n => parseInt(n, 10) || 0);
+  const b = String(current).split('.').map(n => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const x = a[i] ?? 0;
+    const y = b[i] ?? 0;
+    if (x !== y) return x > y;
+  }
+  return false;
+}
 
 function toolDef(name, description, params, execute) {
   return {
@@ -82,6 +103,9 @@ export function apply(ctx, config = {}) {
   config.storageDir = config.storageDir || join(process.env.DSH_PROFILE_DIR || '.', 'fish-school');
   config.autoScan = config.autoScan !== false;
   config.peerAddresses = Array.isArray(config.peerAddresses) ? config.peerAddresses : [];
+  config.updateRepo = typeof config.updateRepo === 'string' && config.updateRepo.includes('/')
+    ? config.updateRepo
+    : 'eahowsong-a11y/dsh-fish-school';
 
   const logger = ctx.logger('fish-school');
   const store = createStore(config.storageDir);
@@ -147,11 +171,61 @@ export function apply(ctx, config = {}) {
             me: store.identity(),
             port: config.port,
             storageDir: config.storageDir,
+            version: CURRENT_VERSION,
+            updateRepo: config.updateRepo,
             knowledgeCount: store.all().length,
             peers: network.listPeers(),
             interfaces: network.interfaces(),
           });
         } catch (err) { return send(res, 500, { error: err.message }); }
+      },
+    }));
+
+    // GET /fish-school/v1/check-update — current vs latest published release.
+    // DSH cannot check for updates on a `file:` dependency, so the panel asks GitHub
+    // itself. Failures are reported as data, never as a broken panel.
+    let updateCache = { at: 0, data: null };
+    async function latestRelease(force) {
+      if (!force && updateCache.data && Date.now() - updateCache.at < UPDATE_TTL_MS) {
+        return updateCache.data;
+      }
+      const res = await fetch(`https://api.github.com/repos/${config.updateRepo}/releases/latest`, {
+        headers: { accept: 'application/vnd.github+json', 'user-agent': 'dsh-fish-school' },
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!res.ok) throw new Error(`GitHub 返回 ${res.status}`);
+      const body = await res.json();
+      const asset = (body.assets ?? []).find(a => /\.tgz$/i.test(String(a.name ?? '')));
+      const data = {
+        latest: String(body.tag_name ?? '').replace(/^v/, ''),
+        publishedAt: body.published_at ?? '',
+        releaseUrl: body.html_url ?? '',
+        assetUrl: asset?.browser_download_url ?? '',
+        assetName: asset?.name ?? '',
+      };
+      updateCache = { at: Date.now(), data };
+      return data;
+    }
+
+    ctx.effect(() => webServer.register({
+      kind: 'exact', path: '/fish-school/v1/check-update',
+      async handler(req, res) {
+        const rejection = connection.requestRejection({ headers: req.headers });
+        if (rejection) return send(res, rejection, { error: 'unauthorized' });
+        if (req.method !== 'GET') return send(res, 405, { error: 'method not allowed' });
+        const url = new URL(req.url ?? '/', 'http://local');
+        const base = { current: CURRENT_VERSION, repo: config.updateRepo };
+        try {
+          const latest = await latestRelease(url.searchParams.get('refresh') === '1');
+          return send(res, 200, {
+            ...base,
+            ...latest,
+            hasUpdate: Boolean(latest.latest) && isNewer(latest.latest, CURRENT_VERSION),
+          });
+        } catch (err) {
+          logger.warn('update check failed: %s', err.message);
+          return send(res, 200, { ...base, error: err.message });
+        }
       },
     }));
 

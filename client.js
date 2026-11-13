@@ -20,6 +20,7 @@ window.__ModuleLoader__.load({
         port: 'Port', entries: 'Entries', online: 'Online',
         delete: 'Delete', makePublic: 'Make public', makePrivate: 'Make private', private: 'Private',
         remote: 'Remote',
+        version: 'Version', checkUpdate: 'Check', checkingUpdate: 'Checking…', upToDate: 'Up to date', updateAvailable: 'Update available', updateFailed: 'Cannot check',
         loading: 'Loading…', loadFailed: 'Cannot reach Fish school: {e}',
         refHint: 'Reference: ',
         ref: 'Reference a fish or its knowledge', refAll: 'All fish', refMine: 'Mine',
@@ -50,6 +51,7 @@ window.__ModuleLoader__.load({
         port: '端口', entries: '条目', online: '在线',
         delete: '删除', makePublic: '公开', makePrivate: '设为私有', private: '私有',
         remote: '远程',
+        version: '版本', checkUpdate: '检查', checkingUpdate: '检查中…', upToDate: '已是最新', updateAvailable: '有可用更新', updateFailed: '无法检查',
         loading: '加载中…', loadFailed: '无法连接鱼群服务：{e}',
         refHint: '引用：',
         ref: '引用某条鱼及其知识', refAll: '全部鱼', refMine: '我的',
@@ -123,6 +125,41 @@ window.__ModuleLoader__.load({
         ta.value = text; document.body.appendChild(ta); ta.select();
         document.execCommand('copy'); document.body.removeChild(ta);
       }
+    }
+
+    // Current vs published version. DSH shows the package badge but cannot check a
+    // `file:` dependency for updates, so the panel reports it here.
+    function VersionNotice({ t, status, update, onCheck }) {
+      const d = update.data;
+      const busy = update.busy;
+      const hasUpdate = Boolean(d?.hasUpdate);
+      const color = d?.error
+        ? 'var(--dsw-alias-state-warn-primary)'
+        : hasUpdate ? 'var(--dsw-alias-state-warn-primary)' : 'var(--dsw-alias-label-secondary)';
+      const label = busy || (!d && !update.error)
+        ? t('checkingUpdate')
+        : d?.error ? `${t('updateFailed')}：${d.error}`
+        : hasUpdate ? `${t('updateAvailable')} → v${d.latest}`
+        : d?.latest ? `${t('upToDate')}（v${d.current}）`
+        : t('updateFailed');
+
+      return h('div', {
+        style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 10,
+          fontSize: 11.5, color },
+      },
+        h('span', null, label),
+        hasUpdate && d.releaseUrl && h('a', {
+          href: d.releaseUrl, target: '_blank', rel: 'noreferrer',
+          style: { color: 'var(--dsw-alias-brand-primary)', textDecoration: 'underline' },
+        }, 'Release'),
+        hasUpdate && d.assetName && h('span', { style: S.muted }, d.assetName),
+        h('button', { style: S.btnSmall, disabled: busy, onClick: onCheck },
+          busy ? t('checkingUpdate') : t('checkUpdate')),
+        h('a', {
+          href: `https://github.com/${status.updateRepo ?? ''}`, target: '_blank', rel: 'noreferrer',
+          style: { ...S.muted, textDecoration: 'underline' },
+        }, '@' + (status.updateRepo ?? ''))
+      );
     }
 
     function EntryCard({ e, myId, t, onDelete, onToggleVisibility }) {
@@ -292,6 +329,21 @@ window.__ModuleLoader__.load({
       const [addAddr, setAddAddr] = useState('');
       const [peerBusy, setPeerBusy] = useState(false);
       const [peerNote, setPeerNote] = useState('');
+      const [update, setUpdate] = useState({ busy: false, data: null });
+
+      // Ask the host for current vs latest version. The host caches it; `refresh`
+      // forces a re-check when the user clicks the button.
+      const checkUpdate = useCallback(async (force) => {
+        setUpdate(prev => ({ ...prev, busy: true }));
+        try {
+          const data = await api('/check-update' + (force ? '?refresh=1' : ''));
+          setUpdate({ busy: false, data });
+        } catch (err) {
+          setUpdate({ busy: false, data: { error: err.message } });
+        }
+      }, []);
+
+      useEffect(() => { checkUpdate(false); }, [checkUpdate]);
 
       const rename = useCallback(async () => {
         setSaving(true);
@@ -406,7 +458,7 @@ window.__ModuleLoader__.load({
                         'LAN: 未加入组播')
                 )
               ),
-          h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 12 } },
+          h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginTop: 12 } },
             h('div', { style: { padding: 10, background: 'var(--dsw-alias-bg-layer-2)', borderRadius: 8 } },
               h('div', { style: { fontSize: 10, textTransform: 'uppercase', marginBottom: 4, ...S.muted } }, t('entries')),
               h('div', { style: { fontSize: 18, fontWeight: 600 } }, status.knowledgeCount)
@@ -414,8 +466,13 @@ window.__ModuleLoader__.load({
             h('div', { style: { padding: 10, background: 'var(--dsw-alias-bg-layer-2)', borderRadius: 8 } },
               h('div', { style: { fontSize: 10, textTransform: 'uppercase', marginBottom: 4, ...S.muted } }, t('port')),
               h('div', { style: { fontSize: 18, fontWeight: 600 } }, status.port)
+            ),
+            h('div', { style: { padding: 10, background: 'var(--dsw-alias-bg-layer-2)', borderRadius: 8 } },
+              h('div', { style: { fontSize: 10, textTransform: 'uppercase', marginBottom: 4, ...S.muted } }, t('version')),
+              h('div', { style: { fontSize: 18, fontWeight: 600 } }, 'v', status.version ?? '—')
             )
-          )
+          ),
+          h(VersionNotice, { t, status, update, onCheck: () => checkUpdate(true) })
         ),
 
         // Knowledge library card
