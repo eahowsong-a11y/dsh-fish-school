@@ -686,7 +686,7 @@ export function apply(ctx, config = {}) {
       async ({ refs }, execCtx) => {
         const tokens = String(refs).split(/[\s,]+/).filter(Boolean);
         const results = await Promise.all(tokens.map(async ref => {
-          const m = ref.match(/^@([^/]+)\/(knowledge|conversation|file|knowledge)\/(.+)$/);
+          const m = ref.match(/^@([^/]+)\/(knowledge|conversation|file)\/(.+)$/);
           if (!m) return { ref, ok: false, error: 'Invalid reference format' };
           const [, fish, type, id] = m;
           const myName = store.identity().name;
