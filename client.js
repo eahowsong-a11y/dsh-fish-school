@@ -53,6 +53,11 @@ window.__ModuleLoader__.load({
         recentRefs: 'Recent references', browseFish: 'Browse by fish', refBack: '← All fish', refSearchPlaceholder: 'Search…',
         offline: 'Offline', shareManual: 'Manual', shareUpload: 'Upload', shareName: 'Name', noShares: 'No shares yet.',
         refNoMatch: 'No matches', refKeys: '↑↓ move · Enter insert · Esc close',
+        preview: 'Preview', previewClose: 'Close', previewLoading: 'Loading…', previewError: 'Cannot load content',
+        tabManual: 'Manual', tabFolder: 'Folders', tabProject: 'Projects',
+        folderSyncHint: '🔄 Auto-sync changes', projectSyncHint: '🔄 Auto-sync sessions',
+        updateRestart: 'Update complete! Please restart DSH or <a href="javascript:location.reload()" style="color:var(--dsw-alias-brand-primary);text-decoration:underline">reload this page</a>.',
+        searchPlaceholder: 'Search title, path, tags…', searchClear: 'Clear',
       },
       zh: {
         title: '鱼群', subtitle: '在局域网内的 DeepSeek Harness 实例间共享知识',
@@ -98,6 +103,11 @@ window.__ModuleLoader__.load({
         recentRefs: '最近引用', browseFish: '按鱼浏览', refBack: '← 全部鱼', refSearchPlaceholder: '搜索…',
         offline: '离线', shareManual: '手动', shareUpload: '上传', shareName: '名称', noShares: '还没有共享单元。',
         refNoMatch: '没有匹配项', refKeys: '↑↓ 选择 · Enter 插入 · Esc 关闭',
+        preview: '预览', previewClose: '关闭', previewLoading: '加载中…', previewError: '无法加载内容',
+        tabManual: '手动发布', tabFolder: '文件夹', tabProject: '项目会话',
+        folderSyncHint: '🔄 自动监控文件变化', projectSyncHint: '🔄 自动同步会话',
+        updateRestart: '更新完成！请重启 DSH 或 <a href="javascript:location.reload()" style="color:var(--dsw-alias-brand-primary);text-decoration:underline">刷新页面</a> 使新版本生效。',
+        searchPlaceholder: '搜索标题、路径、标签…', searchClear: '清空',
       },
     };
 
@@ -174,6 +184,78 @@ window.__ModuleLoader__.load({
         ta.value = text; document.body.appendChild(ta); ta.select();
         document.execCommand('copy'); document.body.removeChild(ta);
       }
+    }
+
+    // Preview Modal Component
+    function PreviewModal({ item, onClose, t }) {
+      const [data, setData] = useState(null);
+      const [loading, setLoading] = useState(true);
+
+      useEffect(() => {
+        const fishId = item.remote ? item.authorId : '';
+        api(`/item?id=${item.id}&fish=${fishId}`)
+          .then(res => {
+            setData(res);
+            setLoading(false);
+          })
+          .catch(err => {
+            setData({ error: err.message });
+            setLoading(false);
+          });
+      }, [item]);
+
+      const renderContent = () => {
+        if (loading) return h('div', { style: { textAlign: 'center', padding: 40 } }, t('previewLoading'));
+        if (data?.error) return h('div', { style: { color: 'var(--dsw-alias-state-error-primary)', padding: 20 } }, t('previewError') + ': ' + data.error);
+
+        if (data?.messages && Array.isArray(data.messages)) {
+          return h('div', { style: { maxHeight: '60vh', overflowY: 'auto' } },
+            data.messages.map((msg, idx) =>
+              h('div', { key: idx, style: { marginBottom: 16, padding: 12, background: 'var(--dsw-alias-bg-layer-2)', borderRadius: 8 } },
+                h('div', { style: { fontSize: 11, ...S.muted, marginBottom: 6, textTransform: 'uppercase' } }, msg.role),
+                h('pre', { style: { whiteSpace: 'pre-wrap', fontSize: 13, margin: 0, fontFamily: 'inherit' } }, msg.text)
+              )
+            )
+          );
+        }
+
+        if (data?.content) {
+          return h('div', { style: { maxHeight: '60vh', overflowY: 'auto' } },
+            h('pre', { style: { whiteSpace: 'pre-wrap', fontSize: 13, margin: 0 } }, data.content)
+          );
+        }
+
+        return h('div', { style: { ...S.muted, padding: 20, textAlign: 'center' } }, t('noKnowledge'));
+      };
+
+      return h('div', {
+        style: {
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.75)', display: 'flex',
+          alignItems: 'center', justifyContent: 'center', zIndex: 9999
+        },
+        onClick: onClose
+      },
+        h('div', {
+          style: {
+            background: 'var(--dsw-alias-bg-base)', borderRadius: 12,
+            padding: 24, maxWidth: '80%', maxHeight: '85%', overflow: 'hidden',
+            boxShadow: '0 8px 32px rgba(0,0,0,0.4)', display: 'flex', flexDirection: 'column',
+            minWidth: 400
+          },
+          onClick: e => e.stopPropagation()
+        },
+          h('div', { style: { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, paddingBottom: 12, borderBottom: '1px solid var(--dsw-alias-border-l1)' } },
+            h('span', { style: { fontSize: 20 } }, item.type === 'conversation' ? '💬' : item.type === 'file' ? '📎' : '📄'),
+            h('h3', { style: { margin: 0, flex: 1, fontSize: 16, fontWeight: 600 } }, itemTitle(item)),
+            h('button', { style: { ...S.btn, padding: '4px 12px' }, onClick: onClose }, t('previewClose'))
+          ),
+          h('div', { style: { fontSize: 12, ...S.muted, marginBottom: 12 } },
+            item.author, item.path ? ` · ${item.path}` : '', item.messageCount ? ` · ${item.messageCount} msgs` : ''
+          ),
+          renderContent()
+        )
+      );
     }
 
     const activeBtn = S.activeBtn;
@@ -767,11 +849,32 @@ window.__ModuleLoader__.load({
       return item.title || item.summary || item.path || item.name || item.id;
     }
 
-    function CollectionItems({ t, fishId, colId, filter, myId, reloadKey, onDelete, onToggleVisibility }) {
+    function CollectionItems({ t, fishId, colId, filter, myId, reloadKey, onDelete, onToggleVisibility, onPreview, colKind, searchQuery }) {
       const [list, setList] = useState({ items: [], cursor: null, done: false, busy: false, error: '' });
       const [start, setStart] = useState(0);
       const busyRef = useRef(false);
-      const type = filter === 'conversations' ? 'conversation' : '';
+      
+      // 根据新的 Tab 筛选逻辑过滤条目
+      const filterBySource = (items) => {
+        if (filter === 'all') return items;
+        if (filter === 'manual') return items.filter(i => !colKind || colKind === 'manual');
+        if (filter === 'folders') return items.filter(i => colKind === 'folder');
+        if (filter === 'projects') return items.filter(i => colKind === 'project');
+        return items;
+      };
+      
+      // 搜索过滤
+      const filterBySearch = (items) => {
+        if (!searchQuery || !searchQuery.trim()) return items;
+        const q = searchQuery.toLowerCase();
+        return items.filter(item => {
+          const searchableText = [
+            item.title, item.summary, item.name, item.path, item.excerpt, item.author,
+            ...(item.tags || [])
+          ].filter(Boolean).join(' ').toLowerCase();
+          return searchableText.includes(q);
+        });
+      };
 
       const loadPage = useCallback(async (cursor, reset) => {
         if (busyRef.current) return;
@@ -779,7 +882,6 @@ window.__ModuleLoader__.load({
         setList(p => ({ ...p, busy: true }));
         try {
           const q = new URLSearchParams({ fish: fishId, collection: colId, limit: '50' });
-          if (type) q.set('type', type);
           if (cursor) q.set('cursor', cursor);
           const r = await api('/items?' + q.toString());
           setList(p => ({ items: (reset ? [] : p.items).concat(r.items || []), cursor: r.nextCursor || null,
@@ -787,11 +889,11 @@ window.__ModuleLoader__.load({
         } catch (err) {
           setList(p => ({ ...p, busy: false, error: err.message }));
         } finally { busyRef.current = false; }
-      }, [fishId, colId, type]);
+      }, [fishId, colId]);
 
       useEffect(() => { setStart(0); loadPage(null, true); }, [loadPage, reloadKey]);
 
-      const shown = filter === 'files' ? list.items.filter(i => i.type !== 'conversation') : list.items;
+      const shown = filterBySearch(filterBySource(list.items));
       const onScroll = (e) => {
         const el = e.currentTarget;
         setStart(Math.max(0, Math.floor(el.scrollTop / ROW_H) - 2));
@@ -811,6 +913,7 @@ window.__ModuleLoader__.load({
               item.author, item.messageCount ? ` · ${item.messageCount} msgs` : '', item.path ? ` · ${item.path}` : '')),
           (item.effectivePublic === false || item.isPublic === false) &&
             h('span', { style: { ...S.tag, color: 'var(--dsw-alias-state-warn-primary)' } }, t('private')),
+          h('button', { style: S.btnSmall, title: t('preview'), onClick: (e) => { e.stopPropagation(); onPreview?.(item); } }, '👁️'),
           mine && h('button', { style: S.btnSmall, title: item.isPublic ? t('makePrivate') : t('makePublic'),
             onClick: () => onToggleVisibility(item.id, item.isPublic === false) }, item.isPublic === false ? '🔓' : '🔒'),
           mine && h('button', { style: S.btnDanger, title: t('delete'), onClick: () => onDelete(item.id) }, '🗑'));
@@ -827,11 +930,12 @@ window.__ModuleLoader__.load({
     }
 
 
-    function LibraryPanel({ t, filter, myId, onDelete, onToggleVisibility }) {
+    function LibraryPanel({ t, filter, myId, onDelete, onToggleVisibility, onPreview }) {
       const [state] = useLibrary();
       const [collapsedFish, setCollapsedFish] = useState(new Set());
       const [collapsedCol, setCollapsedCol] = useState(new Set());
       const [reload, setReload] = useState(0);
+      const [searchQuery, setSearchQuery] = useState('');
       const seen = useRef(new Set());
 
       useEffect(() => {
@@ -862,7 +966,32 @@ window.__ModuleLoader__.load({
       const del = after(onDelete);
       const vis = after(onToggleVisibility);
 
-      return h('div', null, state.groups.map(fish =>
+      // Filter groups and collections by search query
+      const normalizedQuery = searchQuery.trim().toLowerCase();
+      const matchesSearch = (text) => !normalizedQuery || String(text || '').toLowerCase().includes(normalizedQuery);
+      
+      const filteredGroups = normalizedQuery ? state.groups.map(fish => {
+        const matchingCols = fish.collections.filter(col => 
+          matchesSearch(col.name) || matchesSearch(col.kind)
+        );
+        return matchingCols.length > 0 ? { ...fish, collections: matchingCols } : null;
+      }).filter(Boolean) : state.groups;
+
+      return h('div', null,
+        h('div', { style: { display: 'flex', gap: 6, marginBottom: 12, alignItems: 'center' } },
+          h('input', {
+            type: 'text',
+            style: { ...S.input, flex: 1 },
+            placeholder: t('searchPlaceholder'),
+            value: searchQuery,
+            onChange: e => setSearchQuery(e.target.value),
+          }),
+          searchQuery && h('button', {
+            style: { ...S.btnSmall, padding: '6px 10px' },
+            onClick: () => setSearchQuery(''),
+          }, '✕ ' + t('searchClear'))
+        ),
+        filteredGroups.map(fish =>
         h('div', { key: fish.id, style: { marginBottom: 16 } },
           h('div', {
             style: { padding: '8px 10px', background: 'var(--dsw-alias-bg-layer-2)', borderRadius: 8, cursor: 'pointer',
@@ -885,11 +1014,14 @@ window.__ModuleLoader__.load({
                 },
                   h('span', null, colShut(fish.id + '/' + col.id) ? '▶' : '▼'),
                   h('span', { style: { fontSize: 11, flex: 1 } }, KIND_ICON[col.kind] || '📁', ' ', col.name, ' · ', col.itemCount, ' ', t('entries')),
+                  col.kind === 'folder' && h('span', { style: { ...S.tag, fontSize: 9, color: 'var(--dsw-alias-state-success-primary)' }, title: t('folderSyncHint') }, '🔄'),
+                  col.kind === 'project' && h('span', { style: { ...S.tag, fontSize: 9, color: 'var(--dsw-alias-state-success-primary)' }, title: t('projectSyncHint') }, '🔄'),
                   col.kind !== 'manual' && col.visibility !== 'public' && h('span', { style: { ...S.tag, fontSize: 10 } }, t('private'))
                 ),
                 !colShut(fish.id + '/' + col.id) && h(CollectionItems, {
                   t, fishId: fish.id, colId: col.id, filter, myId, reloadKey: reload,
-                  onDelete: del, onToggleVisibility: vis,
+                  onDelete: del, onToggleVisibility: vis, onPreview, colKind: col.kind,
+                  searchQuery: normalizedQuery,
                 })
               )
             )
@@ -910,6 +1042,7 @@ window.__ModuleLoader__.load({
       const [peerBusy, setPeerBusy] = useState(false);
       const [peerNote, setPeerNote] = useState('');
       const [update, setUpdate] = useState({ busy: false, data: null });
+      const [previewItem, setPreviewItem] = useState(null);
 
       const checkUpdate = useCallback(async (force) => {
         setUpdate(prev => ({ ...prev, busy: true }));
@@ -999,55 +1132,51 @@ window.__ModuleLoader__.load({
       const myId = status.me.id;
 
       return h('div', { style: S.page },
-        h('div', { style: { marginBottom: 24 } },
-          h('h1', { style: { fontSize: 22, fontWeight: 600, margin: '0 0 4px' } }, '🐟 ', t('title')),
-          h('div', { style: { fontSize: 13, ...S.muted } }, t('subtitle'))
+        h('div', { style: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 20 } },
+          h('div', null,
+            h('h1', { style: { fontSize: 22, fontWeight: 600, margin: '0 0 4px', display: 'flex', alignItems: 'center', gap: 8 } }, 
+              '🐟 ', t('title'),
+              h('span', { style: { fontSize: 11, fontWeight: 400, ...S.muted, marginLeft: 4 } }, 'v', status.version)
+            ),
+            h('div', { style: { fontSize: 13, ...S.muted } }, t('subtitle'))
+          ),
+          h('div', { style: { display: 'flex', alignItems: 'center', gap: 12, fontSize: 11, ...S.muted } },
+            h('span', null, '🔌 :', status.port),
+            h('span', null, '📦 ', status.knowledgeCount),
+            status.interfaces?.length
+              ? h('span', { style: { color: 'var(--dsw-alias-state-success-primary)' } }, '📡')
+              : h('span', { style: { color: 'var(--dsw-alias-state-warn-primary)' }, title: 'LAN: 未加入组播' }, '📡')
+          )
         ),
+
+        h(VersionNotice, { t, status, update, onCheck: () => checkUpdate(true) }),
 
         h('div', { style: S.card },
           h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 } },
-            h('h2', { style: S.h2 }, t('me')),
-            !edit && h('button', { style: S.btn, onClick: () => setEdit(true) }, t('rename'))
-          ),
-          edit
-            ? h('div', { style: { display: 'flex', gap: 6 } },
-                h('input', {
-                  style: S.input, value: draft, disabled: saving, autoFocus: true,
-                  placeholder: t('nameHint'),
-                  onChange: e => setDraft(e.target.value),
-                  onKeyDown: e => { if (e.key === 'Enter') rename(); if (e.key === 'Escape') setEdit(false); },
-                }),
-                h('button', { style: { ...S.btn, background: 'var(--dsw-alias-brand-primary)', color: '#fff', border: 'none' },
-                  disabled: saving || !draft.trim(), onClick: rename }, saving ? t('saving') : t('save')),
-                h('button', { style: S.btn, disabled: saving, onClick: () => setEdit(false) }, t('cancel'))
-              )
-            : h('div', { style: { display: 'flex', alignItems: 'center', gap: 12 } },
-                h('div', { style: { width: 40, height: 40, borderRadius: '50%', background: 'var(--dsw-alias-brand-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 } }, '🐟'),
-                h('div', null,
-                  h('div', { style: { fontWeight: 600, marginBottom: 2 } }, status.me.name, ' ', h('span', { style: S.muted }, '(', t('you'), ')')),
-                  h('div', { style: { fontSize: 11, ...S.muted } }, status.me.id.slice(0, 13), '…'),
-                  status.interfaces?.length
-                    ? h('div', { style: { fontSize: 10.5, ...S.muted, marginTop: 2 } },
-                        'LAN: ', status.interfaces.join(', '))
-                    : h('div', { style: { fontSize: 10.5, color: 'var(--dsw-alias-state-warn-primary)', marginTop: 2 } },
-                        'LAN: 未加入组播')
-                )
-              ),
-          h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginTop: 12 } },
-            h('div', { style: { padding: 10, background: 'var(--dsw-alias-bg-layer-2)', borderRadius: 8 } },
-              h('div', { style: { fontSize: 10, textTransform: 'uppercase', marginBottom: 4, ...S.muted } }, t('entries')),
-              h('div', { style: { fontSize: 18, fontWeight: 600 } }, status.knowledgeCount)
+            h('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
+              h('div', { style: { width: 32, height: 32, borderRadius: '50%', background: 'var(--dsw-alias-brand-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16 } }, '🐟'),
+              edit
+                ? h('input', {
+                    style: { ...S.input, width: 200 }, value: draft, disabled: saving, autoFocus: true,
+                    placeholder: t('nameHint'),
+                    onChange: e => setDraft(e.target.value),
+                    onKeyDown: e => { if (e.key === 'Enter') rename(); if (e.key === 'Escape') setEdit(false); },
+                  })
+                : h('div', null,
+                    h('div', { style: { fontWeight: 600, fontSize: 14 } }, status.me.name, ' ', h('span', { style: { ...S.muted, fontWeight: 400 } }, '(', t('you'), ')')),
+                    h('div', { style: { fontSize: 10, ...S.muted } }, status.me.id.slice(0, 13), '…')
+                  )
             ),
-            h('div', { style: { padding: 10, background: 'var(--dsw-alias-bg-layer-2)', borderRadius: 8 } },
-              h('div', { style: { fontSize: 10, textTransform: 'uppercase', marginBottom: 4, ...S.muted } }, t('port')),
-              h('div', { style: { fontSize: 18, fontWeight: 600 } }, status.port)
-            ),
-            h('div', { style: { padding: 10, background: 'var(--dsw-alias-bg-layer-2)', borderRadius: 8 } },
-              h('div', { style: { fontSize: 10, textTransform: 'uppercase', marginBottom: 4, ...S.muted } }, t('version')),
-              h('div', { style: { fontSize: 18, fontWeight: 600 } }, 'v', status.version ?? '—')
+            h('div', { style: { display: 'flex', gap: 6 } },
+              edit
+                ? h(React.Fragment, null,
+                    h('button', { style: { ...S.btn, background: 'var(--dsw-alias-brand-primary)', color: '#fff', border: 'none', fontSize: 12 },
+                      disabled: saving || !draft.trim(), onClick: rename }, saving ? t('saving') : t('save')),
+                    h('button', { style: { ...S.btn, fontSize: 12 }, disabled: saving, onClick: () => setEdit(false) }, t('cancel'))
+                  )
+                : h('button', { style: { ...S.btn, fontSize: 12 }, onClick: () => setEdit(true) }, t('rename'))
             )
-          ),
-          h(VersionNotice, { t, status, update, onCheck: () => checkUpdate(true) })
+          )
         ),
 
         h('div', { style: S.card },
@@ -1069,7 +1198,7 @@ window.__ModuleLoader__.load({
                 h(UploadCard, { t, onUploaded: refresh }),
                 h(FolderUpload, { t, onUploaded: refresh }),
                 h('div', { style: { display: 'flex', gap: 6, marginBottom: 12 } },
-                  [['all', t('tabAll')], ['files', '📄 ' + t('tabFiles')], ['conversations', '💬 ' + t('tabConv')]].map(([id, label]) =>
+                  [['all', t('tabAll')], ['manual', '✍️ ' + t('tabManual')], ['folders', '📁 ' + t('tabFolder')], ['projects', '🗂️ ' + t('tabProject')]].map(([id, label]) =>
                     h('button', {
                       key: id, onClick: () => setFilter(id),
                       style: { ...S.btn, fontSize: 11,
@@ -1080,7 +1209,7 @@ window.__ModuleLoader__.load({
                     }, label)
                   )
                 ),
-                h(LibraryPanel, { t, filter, myId, onDelete: handleDelete, onToggleVisibility: handleToggleVisibility })
+                h(LibraryPanel, { t, filter, myId, onDelete: handleDelete, onToggleVisibility: handleToggleVisibility, onPreview: setPreviewItem })
               )
             : tab === 'shares'
               ? h('div', null,
