@@ -1032,6 +1032,444 @@ window.__ModuleLoader__.load({
       ));
     }
 
+
+    // ===================== v3 workspace (2.5.0) =====================
+    // Columns: shared library | my shares | share settings | members.
+    const V3_TEXT = {
+      zh: {
+        colLibrary: '共享知识库', colMine: '我的共享', colSettings: '共享设置', colMembers: '鱼群成员',
+        grpFolder: '共享文件夹', grpProject: '共享会话', grpManual: '手动共享',
+        search: '搜索名称、路径、标签…', noFish: '还没有其他鱼，可在右侧添加或扫描局域网。',
+        empty: '暂无内容', noMatch: '没有匹配项', loading: '加载中…', online: '在线', offline: '离线',
+        me: '我', public: '公开', private: '私有', preview: '预览', copyRef: '复制引用', copied: '已复制 {ref}',
+        delete: '删除', confirmDelete: '确定删除「{name}」？', makePublic: '设为公开', makePrivate: '设为私有',
+        kindFolder: '文件夹', kindProject: '项目会话', newShare: '新建共享', editShare: '编辑共享',
+        name: '名称', path: '路径', visibility: '可见性',
+        hintFolder: '共享这个本地文件夹（含子文件夹），文件变化会自动同步。',
+        hintProject: '共享这个工作目录下的 DSH 会话，新会话会自动同步。',
+        browse: '浏览…', create: '创建', save: '保存', cancel: '取消', edit: '编辑', resync: '重新扫描',
+        pickTitle: '选择文件夹', pickUp: '上一级', pickThis: '选择当前文件夹', places: '常用位置',
+        recentWs: '最近的工作区', sessions: '{n} 个会话', truncated: '只显示前 500 个子文件夹',
+        syncIdle: '已同步', syncScanning: '扫描中…', syncImporting: '导入中 {done}/{total}', syncError: '同步出错',
+        addPeer: '添加', scan: '扫描局域网', scanning: '扫描中…', peerHint: 'IP 或 IP:端口',
+        remove: '移除', rename: '改名', missing: '名称和路径都要填写',
+        noShares: '还没有共享文件夹或项目会话，点上方「新建共享」开始。',
+        manualHint: '手动共享来自对话里的发布、上传，可在「我的共享」中查看、设为私有或删除。',
+        found: '找到 {n} 条鱼', none: '本网段没有找到鱼', added: '已添加 {name}', unnamed: '(未命名)',
+      },
+      en: {
+        colLibrary: 'Shared library', colMine: 'My shares', colSettings: 'Share settings', colMembers: 'Members',
+        grpFolder: 'Shared folders', grpProject: 'Shared sessions', grpManual: 'Manual shares',
+        search: 'Search name, path, tags…', noFish: 'No other fish yet. Add one or scan the LAN on the right.',
+        empty: 'Nothing here', noMatch: 'No matches', loading: 'Loading…', online: 'Online', offline: 'Offline',
+        me: 'me', public: 'Public', private: 'Private', preview: 'Preview', copyRef: 'Copy reference', copied: 'Copied {ref}',
+        delete: 'Delete', confirmDelete: 'Delete "{name}"?', makePublic: 'Make public', makePrivate: 'Make private',
+        kindFolder: 'Folder', kindProject: 'Project sessions', newShare: 'New share', editShare: 'Edit share',
+        name: 'Name', path: 'Path', visibility: 'Visibility',
+        hintFolder: 'Shares this local folder and its subfolders; changes sync automatically.',
+        hintProject: 'Shares DSH sessions whose working directory is inside this folder.',
+        browse: 'Browse…', create: 'Create', save: 'Save', cancel: 'Cancel', edit: 'Edit', resync: 'Rescan',
+        pickTitle: 'Choose a folder', pickUp: 'Up', pickThis: 'Use this folder', places: 'Places',
+        recentWs: 'Recent workspaces', sessions: '{n} sessions', truncated: 'Only the first 500 subfolders are shown',
+        syncIdle: 'Synced', syncScanning: 'Scanning…', syncImporting: 'Importing {done}/{total}', syncError: 'Sync error',
+        addPeer: 'Add', scan: 'Scan LAN', scanning: 'Scanning…', peerHint: 'IP or IP:port',
+        remove: 'Remove', rename: 'Rename', missing: 'Name and path are required',
+        noShares: 'No shared folders or project sessions yet. Use "New share" above.',
+        manualHint: 'Manual shares come from publish and upload in chat; manage them under "My shares".',
+        found: 'Found {n} fish', none: 'No fish found on this subnet', added: 'Added {name}', unnamed: '(untitled)',
+      },
+    };
+
+    // Follow the host locale: the registered dictionary answers '鱼群' only in Chinese.
+    function useV3Text(t) {
+      const lang = t('title') === '鱼群' ? 'zh' : 'en';
+      return useCallback((key, vars) => {
+        let s = V3_TEXT[lang][key] ?? V3_TEXT.en[key] ?? key;
+        if (vars) for (const [k, v] of Object.entries(vars)) s = s.split('{' + k + '}').join(String(v));
+        return s;
+      }, [lang]);
+    }
+
+    const V3_GROUPS = [
+      { id: 'folder', icon: '📁', key: 'grpFolder', kinds: ['folder'] },
+      { id: 'project', icon: '🗂️', key: 'grpProject', kinds: ['project'] },
+      { id: 'manual', icon: '✍️', key: 'grpManual', kinds: ['manual', 'upload'] },
+    ];
+
+    const v3Post = (path, body) => api(path, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body ?? {}),
+    });
+
+    function v3Icon(it) {
+      if (it.type === 'conversation') return '💬';
+      const ext = String(it.name || it.path || '').split('.').pop().toLowerCase();
+      if (['md', 'txt', 'rst', 'log'].includes(ext)) return '📝';
+      if (['js', 'mjs', 'ts', 'tsx', 'py', 'json', 'java', 'go', 'rs', 'cs', 'ps1', 'sh', 'yml', 'yaml', 'html', 'css', 'sql'].includes(ext)) return '🧩';
+      return '📄';
+    }
+
+    function v3Label(it) {
+      return it.title || it.summary || it.name || String(it.path || '').split('/').pop() || it.id;
+    }
+
+    function v3Hay(it) {
+      return [it.title, it.summary, it.name, it.path, it.excerpt, ...(it.tags || [])].filter(Boolean).join(' ').toLowerCase();
+    }
+
+    // Folder tree from relative paths. Items without a path sit at the root of their share.
+    function v3Tree(items) {
+      const root = { dirs: new Map(), files: [], count: 0 };
+      for (const it of items) {
+        const parts = String(it.path || '').replace(/\\/g, '/').split('/').filter(Boolean);
+        let node = root; node.count++;
+        for (const seg of parts.slice(0, -1)) {
+          if (!node.dirs.has(seg)) node.dirs.set(seg, { dirs: new Map(), files: [], count: 0 });
+          node = node.dirs.get(seg); node.count++;
+        }
+        node.files.push(it);
+      }
+      return root;
+    }
+
+    function v3Ago(iso) {
+      const ms = Date.now() - new Date(iso).getTime();
+      if (!iso || !Number.isFinite(ms)) return '';
+      const m = Math.round(ms / 60000);
+      if (m < 1) return '<1m';
+      if (m < 60) return m + 'm';
+      const hr = Math.round(m / 60);
+      return hr < 24 ? hr + 'h' : Math.round(hr / 24) + 'd';
+    }
+
+
+    const V3_CSS = `
+.fs3{display:flex;flex-direction:column;height:100%;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font-size:13px}
+.fs3-top{display:flex;align-items:center;gap:10px;padding:12px 18px;border-bottom:1px solid var(--dsw-alias-border-l1)}
+.fs3-top h1{font-size:16px;font-weight:600;margin:0}
+.fs3-cols{flex:1;min-height:0;display:grid;grid-template-columns:minmax(300px,1.4fr) minmax(250px,1fr) minmax(280px,1.05fr) minmax(220px,.8fr)}
+@media (max-width:1280px){.fs3-cols{grid-template-columns:repeat(2,minmax(0,1fr));overflow:auto}.fs3-col{min-height:460px;border-bottom:1px solid var(--dsw-alias-border-l1)}}
+.fs3-col{display:flex;flex-direction:column;min-width:0;min-height:0;border-right:1px solid var(--dsw-alias-border-l1)}
+.fs3-col:last-child{border-right:none}
+.fs3-head{padding:12px 12px 8px;display:flex;flex-direction:column;gap:8px}
+.fs3-h{display:flex;align-items:center;gap:6px;font-weight:600;font-size:13px}
+.fs3-count{margin-left:auto;font-weight:400;font-size:11px;color:var(--dsw-alias-label-secondary)}
+.fs3-body{flex:1;min-height:0;overflow:auto;padding:2px 6px 14px}
+.fs3-in{width:100%;box-sizing:border-box;padding:6px 10px;border-radius:6px;font-size:12.5px;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);outline:none}
+.fs3-in:focus{border-color:var(--dsw-alias-brand-primary)}
+.fs3-mono{font-family:ui-monospace,Consolas,monospace;font-size:11.5px}
+.fs3-row{display:flex;align-items:center;gap:6px;height:28px;padding-right:4px;border-radius:6px;cursor:pointer;user-select:none;white-space:nowrap}
+.fs3-row:hover{background:var(--dsw-alias-bg-layer-2)}
+.fs3-row .fs3-act{display:none;gap:1px}
+.fs3-row:hover .fs3-act{display:flex}
+.fs3-caret{width:12px;flex-shrink:0;text-align:center;font-size:9px;color:var(--dsw-alias-label-secondary)}
+.fs3-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.fs3-meta{font-size:11px;color:var(--dsw-alias-label-secondary);flex-shrink:0}
+.fs3-ib{border:none;background:transparent;cursor:pointer;padding:2px 5px;border-radius:4px;font-size:12px;color:var(--dsw-alias-label-secondary)}
+.fs3-ib:hover{background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary)}
+.fs3-btn{padding:5px 10px;border-radius:6px;font-size:12px;cursor:pointer;border:1px solid var(--dsw-alias-border-l2);background:transparent;color:var(--dsw-alias-label-primary);white-space:nowrap}
+.fs3-btn:hover{background:var(--dsw-alias-bg-layer-2)}
+.fs3-btn:disabled{opacity:.5;cursor:default}
+.fs3-pri{background:var(--dsw-alias-brand-primary);border-color:transparent;color:#fff}
+.fs3-pri:hover{background:var(--dsw-alias-brand-primary);opacity:.9}
+.fs3-danger{color:var(--dsw-alias-state-error-primary)}
+.fs3-tag{font-size:10.5px;padding:1px 6px;border-radius:10px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);flex-shrink:0}
+.fs3-warn{color:var(--dsw-alias-state-warn-primary)}
+.fs3-ok{color:var(--dsw-alias-state-success-primary)}
+.fs3-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;background:var(--dsw-alias-state-idle-primary)}
+.fs3-dot.on{background:var(--dsw-alias-state-success-primary)}
+.fs3-card{border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:10px 12px;margin:6px 0;background:var(--dsw-alias-bg-layer-1)}
+.fs3-card-t{display:flex;align-items:center;gap:6px;font-weight:600;font-size:12.5px;min-width:0}
+.fs3-sub{font-size:11px;color:var(--dsw-alias-label-secondary);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fs3-bar{display:flex;gap:4px;margin-top:8px;flex-wrap:wrap}
+.fs3-empty{padding:22px 10px;text-align:center;font-size:12px;color:var(--dsw-alias-label-secondary);line-height:1.6}
+.fs3-seg{display:flex;gap:2px;padding:2px;border-radius:7px;background:var(--dsw-alias-bg-layer-2)}
+.fs3-seg button{flex:1;border:none;background:transparent;padding:4px 6px;border-radius:5px;cursor:pointer;font-size:12px;color:var(--dsw-alias-label-secondary)}
+.fs3-seg button.on{background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);box-shadow:0 1px 2px rgba(0,0,0,.18)}
+.fs3-form{display:flex;flex-direction:column;gap:8px}
+.fs3-lbl{font-size:11.5px;color:var(--dsw-alias-label-secondary);margin-bottom:-4px}
+.fs3-err{font-size:11.5px;color:var(--dsw-alias-state-error-primary)}
+.fs3-note{font-size:11.5px;color:var(--dsw-alias-label-secondary);line-height:1.5}
+.fs3-mark{background:color-mix(in srgb,var(--dsw-alias-brand-primary) 30%,transparent);color:inherit;border-radius:2px;padding:0}
+.fs3-mask{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:9999}
+.fs3-dlg{width:min(560px,92vw);max-height:78vh;display:flex;flex-direction:column;border-radius:12px;background:var(--dsw-alias-bg-base);border:1px solid var(--dsw-alias-border-l1);box-shadow:0 12px 40px rgba(0,0,0,.35)}
+.fs3-dlg-h{padding:14px 16px 10px;font-weight:600;display:flex;align-items:center;gap:8px}
+.fs3-dlg-b{flex:1;min-height:160px;overflow:auto;padding:0 10px}
+.fs3-dlg-f{display:flex;gap:8px;justify-content:flex-end;padding:12px 16px;border-top:1px solid var(--dsw-alias-border-l1)}`;
+
+    function useV3Styles() {
+      useEffect(() => {
+        let el = document.getElementById('fs3-css');
+        if (!el) { el = document.createElement('style'); el.id = 'fs3-css'; document.head.appendChild(el); }
+        el.textContent = V3_CSS;
+      }, []);
+    }
+
+    function V3Mark({ text, q }) {
+      const s = String(text ?? '');
+      const i = q ? s.toLowerCase().indexOf(q) : -1;
+      if (i < 0) return s;
+      return h(React.Fragment, null, s.slice(0, i),
+        h('mark', { className: 'fs3-mark' }, s.slice(i, i + q.length)), s.slice(i + q.length));
+    }
+
+    function V3Row({ depth = 0, open, icon, label, q, meta, actions, onClick, title }) {
+      return h('div', { className: 'fs3-row', style: { paddingLeft: 4 + depth * 16 }, onClick, title },
+        h('span', { className: 'fs3-caret' }, open == null ? '' : open ? '▾' : '▸'),
+        h('span', { style: { flexShrink: 0 } }, icon),
+        h('span', { className: 'fs3-name' }, h(V3Mark, { text: label, q })),
+        meta != null && meta !== '' ? h('span', { className: 'fs3-meta' }, meta) : null,
+        actions ? h('span', { className: 'fs3-act', onClick: e => e.stopPropagation() }, actions) : null);
+    }
+
+    const v3Toggle = (set, key) => set(prev => {
+      const s = new Set(prev); s.has(key) ? s.delete(key) : s.add(key); return s;
+    });
+
+
+    // Load one fish's collections + items from /tree. `tick` forces a reload after edits.
+    function useFishTree(fishId, enabled, tick) {
+      const [state, setState] = useState({ data: null, error: '', loading: false });
+      useEffect(() => {
+        if (!enabled) return undefined;
+        let alive = true;
+        const load = async () => {
+          setState(s => ({ ...s, loading: !s.data }));
+          try {
+            const data = await api('/tree?fish=' + encodeURIComponent(fishId || ''));
+            if (alive) setState({ data, error: '', loading: false });
+          } catch (err) { if (alive) setState(s => ({ ...s, error: err.message, loading: false })); }
+        };
+        load();
+        const id = setInterval(load, 15000);
+        return () => { alive = false; clearInterval(id); };
+      }, [fishId, enabled, tick]);
+      return state;
+    }
+
+    // Recursive folder node inside one share.
+    function V3Dir({ node, depth, prefix, q, open, toggle, renderItem }) {
+      const dirs = [...node.dirs.entries()].sort((a, b) => a[0].localeCompare(b[0], 'zh'));
+      const files = [...node.files].sort((a, b) => v3Label(a).localeCompare(v3Label(b), 'zh'));
+      return h(React.Fragment, null,
+        dirs.map(([name, child]) => {
+          const key = prefix + '/' + name;
+          const isOpen = Boolean(q) || open.has(key);
+          return h(React.Fragment, { key },
+            h(V3Row, { depth, open: isOpen, icon: isOpen ? '📂' : '📁', label: name, q, meta: child.count,
+              onClick: () => toggle(key) }),
+            isOpen && h(V3Dir, { node: child, depth: depth + 1, prefix: key, q, open, toggle, renderItem }));
+        }),
+        files.map(it => renderItem(it, depth)));
+    }
+
+    // fish → 共享文件夹 / 共享会话 / 手动共享 → share → subfolders → items
+    function V3ShareTree({ v3t, data, q, self, onPreview, onChanged, keyPrefix }) {
+      const [open, setOpen] = useState(() => new Set());
+      const toggle = useCallback(k => v3Toggle(setOpen, keyPrefix + k), [keyPrefix]);
+      const isOpen = k => Boolean(q) || open.has(keyPrefix + k);
+      const openSet = useMemo(() => {
+        const s = new Set();
+        for (const k of open) if (k.startsWith(keyPrefix)) s.add(k.slice(keyPrefix.length));
+        return s;
+      }, [open, keyPrefix]);
+
+      const fishName = data.fish?.name ?? '';
+      const cols = data.collections ?? [];
+      const allItems = data.items ?? [];
+      const items = q ? allItems.filter(it => v3Hay(it).includes(q) || String(fishName).toLowerCase().includes(q)) : allItems;
+      const byCol = new Map();
+      for (const it of items) {
+        if (!byCol.has(it.collectionId)) byCol.set(it.collectionId, []);
+        byCol.get(it.collectionId).push(it);
+      }
+
+      const act = async (fn) => { try { await fn(); onChanged?.(); } catch (err) { alert(err.message); } };
+      const renderItem = (it, depth) => {
+        const ref = `@${fishName}/${it.type}/${it.id}`;
+        const priv = it.effectivePublic === false || it.isPublic === false;
+        const meta = it.type === 'conversation' ? (it.messageCount ? `${it.messageCount}💬` : '') : v3Ago(it.updatedAt);
+        return h(V3Row, {
+          key: it.id, depth, icon: v3Icon(it), label: v3Label(it), q, title: it.path || v3Label(it),
+          meta: priv ? '🔒' : meta,
+          onClick: () => onPreview({ ...it, author: fishName, remote: !self, authorId: data.fish?.id }),
+          actions: h(React.Fragment, null,
+            h('button', { className: 'fs3-ib', title: v3t('copyRef'),
+              onClick: () => { copyText(ref); } }, '🔗'),
+            self && h('button', { className: 'fs3-ib', title: it.isPublic === false ? v3t('makePublic') : v3t('makePrivate'),
+              onClick: () => act(() => v3Post('/set-visibility', { id: it.id, isPublic: it.isPublic === false })) },
+              it.isPublic === false ? '🔓' : '🔒'),
+            self && it.type !== 'file' && h('button', { className: 'fs3-ib fs3-danger', title: v3t('delete'),
+              onClick: () => confirm(v3t('confirmDelete', { name: v3Label(it) })) && act(() => v3Post('/delete', { id: it.id })) }, '🗑')),
+        });
+      };
+
+      const groups = V3_GROUPS.map(g => {
+        const gcols = cols.filter(c => g.kinds.includes(c.kind))
+          .map(c => ({ col: c, list: byCol.get(c.id) ?? [] }))
+          .filter(x => !q || x.list.length);
+        return { g, gcols, count: gcols.reduce((n, x) => n + x.list.length, 0) };
+      }).filter(x => x.gcols.length);
+
+      if (!groups.length) return h('div', { className: 'fs3-note', style: { padding: '4px 28px 8px' } }, q ? v3t('noMatch') : v3t('empty'));
+
+      return h(React.Fragment, null, groups.map(({ g, gcols, count }) => {
+        const gk = '/' + g.id;
+        return h(React.Fragment, { key: g.id },
+          h(V3Row, { depth: 1, open: isOpen(gk), icon: g.icon, label: v3t(g.key), meta: count, onClick: () => toggle(gk) }),
+          isOpen(gk) && gcols.map(({ col, list }) => {
+            const ck = gk + '/' + col.id;
+            const priv = col.kind !== 'manual' && col.visibility !== 'public';
+            // Manual shares hold flat entries; one level is enough.
+            const flat = g.id !== 'folder';
+            return h(React.Fragment, { key: col.id },
+              h(V3Row, { depth: 2, open: isOpen(ck), icon: priv ? '🔒' : (g.id === 'project' ? '🗂️' : g.id === 'manual' ? '📋' : '📁'),
+                label: col.name, q, meta: q ? list.length : (col.stats?.items ?? list.length), onClick: () => toggle(ck) }),
+              isOpen(ck) && (flat
+                ? [...list].sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt))).map(it => renderItem(it, 3))
+                : h(V3Dir, { node: v3Tree(list), depth: 3, prefix: ck, q, open: openSet, toggle, renderItem })));
+          }));
+      }));
+    }
+
+
+    // Column 1: Shared library (remote fish)
+    function V3LibraryColumn({ v3t, libGroups, libSearch, onPreview, tick }) {
+      return h('div', { className: 'fs3-col' },
+        h('div', { className: 'fs3-head' },
+          h('div', { className: 'fs3-h' }, v3t('colLibrary')),
+          h('input', { className: 'fs3-in', placeholder: v3t('search'), value: libSearch, onChange: e => e.target.value })
+        ),
+        h('div', { className: 'fs3-body' },
+          libGroups.length === 0 ? h('div', { className: 'fs3-empty' }, v3t('noFish'))
+          : libGroups.map(fish => {
+              const [expanded, setExpanded] = useState(false);
+              const { data, error, loading } = useFishTree(fish.id, expanded, tick);
+              return h('div', { key: fish.id },
+                h(V3Row, { depth: 0, open: expanded, icon: '🐟', label: fish.name, meta: fish.online ? v3t('online') : v3t('offline'),
+                  onClick: () => setExpanded(!expanded) }),
+                expanded && (loading ? h('div', { className: 'fs3-note', style: { paddingLeft: 32 } }, v3t('loading'))
+                  : error ? h('div', { className: 'fs3-err', style: { paddingLeft: 32 } }, error)
+                  : h(V3ShareTree, { v3t, data, q: libSearch, self: false, onPreview, onChanged: () => {}, keyPrefix: fish.id + '/' })));
+            })
+        )
+      );
+    }
+
+    // Column 2: My shares (self tree)
+    function V3MineColumn({ v3t, myTree, myTreeTick, mineSearch, onPreview, onChanged }) {
+      const { data, error, loading } = myTree;
+      return h('div', { className: 'fs3-col' },
+        h('div', { className: 'fs3-head' },
+          h('div', { className: 'fs3-h' }, v3t('colMine')),
+        h('input', { className: 'fs3-in', placeholder: v3t('search'), value: mineSearch, onChange: e => e.target.value })
+        ),
+        h('div', { className: 'fs3-body' },
+          loading && !data ? h('div', { className: 'fs3-empty' }, v3t('loading'))
+          : error ? h('div', { className: 'fs3-err' }, error)
+          : h(V3ShareTree, { v3t, data: data || { fish: {}, collections: [], items: [] }, q: mineSearch, self: true, onPreview, onChanged, keyPrefix: 'mine/' }))
+      );
+    }
+
+    // Column 3: Settings (folder/project/manual shares management)
+    function V3SettingsColumn({ v3t, myCollections, myTreeTick, onChanged }) {
+      const [seg, setSeg] = useState('folder'); // folder | project | manual
+      const [busy, setBusy] = useState(false);
+      const [edit, setEdit] = useState(null);
+      const cols = myCollections.filter(c => (seg === 'manual' && ['manual', 'upload'].includes(c.kind)) || c.kind === seg);
+      const act = async (fn) => { setBusy(true); try { await fn(); onChanged?.(); setEdit(null); } catch (err) { alert(err.message); } finally { setBusy(false); } };
+
+      return h('div', { className: 'fs3-col' },
+        h('div', { className: 'fs3-head' },
+          h('div', { className: 'fs3-h' }, v3t('colSettings')),
+          h('div', { className: 'fs3-seg' },
+            ['folder', 'project', 'manual'].map(s => h('button', { key: s, className: s === seg ? 'on' : '', onClick: () => setSeg(s) }, v3t('kind' + s[0].toUpperCase() + s.slice(1)))))
+        ),
+        h('div', { className: 'fs3-body' },
+          cols.length === 0 ? h('div', { className: 'fs3-empty' }, v3t('noShares'))
+          : cols.map(col => h('div', { key: col.id, className: 'fs3-card' },
+              h('div', { className: 'fs3-card-t' }, col.name, col.visibility !== 'public' ? ' 🔒' : ''),
+              h('div', { className: 'fs3-sub fs3-mono' }, col.source?.root || 'N/A'),
+              h('div', { className: 'fs3-bar' },
+                h('button', { className: 'fs3-btn', onClick: () => act(() => v3Post('/collections/resync', { id: col.id })) }, v3t('resync')),
+                h('button', { className: 'fs3-btn', onClick: () => act(() => v3Post('/collections/delete', { id: col.id })) }, v3t('delete')))
+            ))
+        )
+      );
+    }
+
+    // Column 4: Members (self identity + peer management)
+    function V3MembersColumn({ v3t, status, onRefresh }) {
+      const [addingPeer, setAddingPeer] = useState(false);
+      const [peerAddr, setPeerAddr] = useState('');
+      const [busy, setBusy] = useState(false);
+      const [msg, setMsg] = useState('');
+      const act = async (fn) => { setBusy(true); try { await fn(); onRefresh?.(); } catch (err) { setMsg(err.message); } finally { setBusy(false); } };
+
+      return h('div', { className: 'fs3-col' },
+        h('div', { className: 'fs3-head' },
+          h('div', { className: 'fs3-h' }, v3t('colMembers'), ' ', h('span', { className: 'fs3-count' }, (status?.peers?.length ?? 0) + 1))
+        ),
+        h('div', { className: 'fs3-body' },
+          h('div', { className: 'fs3-card' },
+            h('div', { className: 'fs3-card-t' }, status.me.name),
+            h('div', { className: 'fs3-sub' }, status.me.id.slice(0, 16) + '…'),
+            h('div', { className: 'fs3-sub' }, '🔌 ' + (status.port || '?'))),
+          h('div', { style: { display: 'flex', gap: 4, margin: '8px 0', padding: '0 6px' } },
+            h('button', { className: 'fs3-btn', disabled: busy, onClick: () => setAddingPeer(!addingPeer) }, v3t('addPeer')),
+            h('button', { className: 'fs3-btn', disabled: busy, onClick: () => act(() => v3Post('/scan', {})) }, v3t('scan'))),
+          addingPeer && h('div', { style: { display: 'flex', gap: 4, padding: '0 6px 8px', marginBottom: 8 } },
+            h('input', { className: 'fs3-in', style: { margin: 0 }, placeholder: v3t('peerHint'), value: peerAddr, onChange: e => setPeerAddr(e.target.value) }),
+            h('button', { className: 'fs3-btn fs3-pri', disabled: busy, onClick: () => act(async () => { await v3Post('/add-peer', { address: peerAddr }); setPeerAddr(''); setAddingPeer(false); }) }, '✓')),
+          msg && h('div', { className: 'fs3-note', style: { padding: '0 6px 8px' } }, msg),
+          (status.peers ?? []).map(peer => h('div', { key: peer.id, className: 'fs3-card' },
+            h('div', { className: 'fs3-card-t' },
+              h('div', { className: 'fs3-dot' + (peer.online ? ' on' : '') }),
+              h('span', { style: { flex: 1 } }, peer.name),
+              h('button', { className: 'fs3-ib fs3-danger', disabled: busy, onClick: () => act(() => v3Post('/remove-peer', { address: peer.address })) }, '✕')),
+            h('div', { className: 'fs3-sub' }, peer.address + ':' + peer.port)))
+        )
+      );
+    }
+
+
+    // Main four-column workspace
+    function PanelV3({ t }) {
+      const [{ status }, refresh] = useSchool();
+      const [libGroups, setLibGroups] = useState([]);
+      const [libSearch, setLibSearch] = useState('');
+      const [mineSearch, setMineSearch] = useState('');
+      const [tick, setTick] = useState(0);
+      const myTreeState = useFishTree(status?.me?.id, true, tick);
+
+      const v3t = useV3Text(t);
+      useV3Styles();
+
+      // Reload library (peer-shared collections)
+      useEffect(() => {
+        const load = () => api('/library').then(d => setLibGroups(d.fish?.filter(f => !f.self) || [])).catch(() => {});
+        load();
+        const id = setInterval(load, 10000);
+        return () => clearInterval(id);
+      }, []);
+
+      if (!status) return h('div', { style: S.page }, t('loading'));
+
+      return h('div', { className: 'fs3' },
+        h('div', { className: 'fs3-top' },
+          h('span', { style: { fontSize: 20 } }, '🐟'),
+          h('h1', null, t('title')),
+          h('span', { className: 'fs3-tag' }, 'v' + status.version),
+          h('span', { className: 'fs3-tag' }, '🔌 ' + (status.port || '?')),
+          h('span', { style: { marginLeft: 'auto', fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } }, (status.peers?.filter(p => p.online).length ?? 0) + 1, ' online')),
+        h('div', { className: 'fs3-cols' },
+          h(V3LibraryColumn, { v3t, libGroups, libSearch, onPreview: () => {}, tick }),
+          h(V3MineColumn, { v3t, myTree: myTreeState, mineSearch, onPreview: () => {}, onChanged: () => setTick(t => t + 1) }),
+          h(V3SettingsColumn, { v3t, myCollections: myTreeState.data?.collections ?? [], myTreeTick: tick, onChanged: () => setTick(t => t + 1) }),
+          h(V3MembersColumn, { v3t, status, onRefresh: refresh }))
+      );
+    }
+
+
     function Panel({ t }) {
       const [{ status, entries, error }, refresh, setState] = useSchool();
       const [edit, setEdit] = useState(false);
@@ -1768,4 +2206,3 @@ window.__ModuleLoader__.load({
     };
   },
 });
-
