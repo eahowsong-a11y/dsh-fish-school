@@ -187,8 +187,12 @@ export function apply(ctx, config = {}) {
       const messages = session.deriveMessages();
       const result = [];
       for (const msg of messages) {
-        const text = blocksToText(msg.content);
-        if (text && (msg.role === 'user' || msg.role === 'assistant')) result.push({ role: msg.role, text });
+        if (msg.role === 'user' || msg.role === 'assistant') {
+          const text = blocksToText(msg.content);
+          if (!text) continue;
+          const reasoning = msg.content?.filter(b => b.type === 'reasoning').map(b => b.text ?? '').join('').trim() || undefined;
+          result.push({ role: msg.role, text, reasoning });
+        }
       }
       return result;
     } catch (err) { logger.warn('extractMessages failed: %s', err.message); return []; }

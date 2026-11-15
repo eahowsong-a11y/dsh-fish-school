@@ -500,13 +500,30 @@ window.__ModuleLoader__.load({
         if (data?.error) return h('div', { style: { color: 'var(--dsw-alias-state-error-primary)', padding: 20 } }, t('previewError') + ': ' + data.error);
 
         if (data?.messages && Array.isArray(data.messages)) {
+          // 合并连续的 assistant 消息
+          const merged = [];
+          for (const msg of data.messages) {
+            if (msg.role === 'assistant' && merged.length > 0 && merged[merged.length - 1].role === 'assistant') {
+              const prev = merged[merged.length - 1];
+              prev.text += '\n\n' + msg.text;
+              if (msg.reasoning) prev.reasoning = (prev.reasoning || '') + '\n\n' + msg.reasoning;
+            } else {
+              merged.push({ ...msg });
+            }
+          }
           return h('div', { style: bodyStyle },
-            data.messages.map((msg, idx) =>
-              h('div', { key: idx, style: { marginBottom: 16, padding: 12, background: 'var(--dsw-alias-bg-layer-2)', borderRadius: 8 } },
-                h('div', { style: { fontSize: 11, ...S.muted, marginBottom: 6, textTransform: 'uppercase' } }, msg.role),
-                h('pre', { style: { whiteSpace: 'pre-wrap', fontSize: 13, margin: 0, fontFamily: 'inherit' } }, msg.text)
-              )
-            )
+            merged.map((msg, idx) => {
+              const isUser = msg.role === 'user';
+              return h('div', { key: idx, style: { display: 'flex', flexDirection: isUser ? 'row-reverse' : 'row', marginBottom: 16, gap: 8 } },
+                h('div', { style: { padding: 12, background: isUser ? 'var(--dsw-alias-bg-layer-2)' : 'var(--dsw-alias-bg-layer-1)', borderRadius: 8, maxWidth: '85%' } },
+                  h('div', { style: { fontSize: 11, ...S.muted, marginBottom: 6, textTransform: 'uppercase', textAlign: isUser ? 'right' : 'left' } }, msg.role),
+                  msg.reasoning && h('details', { style: { marginBottom: 8, padding: 8, background: 'var(--dsw-alias-bg-base)', borderRadius: 4, fontSize: 12, border: '1px solid var(--dsw-alias-border-l1)' } },
+                    h('summary', { style: { cursor: 'pointer', ...S.muted, fontWeight: 500 } }, '💭 思考过程'),
+                    h('div', { className: 'fs-md', style: { marginTop: 6, fontSize: 12 } }, mdRender(msg.reasoning))),
+                  h('div', { className: 'fs-md', style: { fontSize: 13 } }, mdRender(msg.text))
+                )
+              );
+            })
           );
         }
 
@@ -1420,7 +1437,7 @@ window.__ModuleLoader__.load({
         st.error ? h('div', { className: 'fs3-err' }, st.error)
         : st.loading ? h('div', { className: 'fs3-empty' }, '加载中…')
         : !shown.length ? h('div', { className: 'fs3-empty' }, '没有找到包含会话的工作区')
-        : shown.map(w => h('div', { key: w.cwd, className: 'fs3-row', title: w.cwd, onClick: () => onPick(w.cwd) },
+        : shown.map(w => h('div', { key: w.cwd, className: 'fs3-row', title: w.cwd, onClick: () => onPick(w.cwd, w.name || v3BaseName(w.cwd)) },
             h('span', null, '🗂️'),
             h('span', { style: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' } }, w.cwd),
             h('span', { className: 'fs3-card-sub', style: { margin: 0 } }, w.sessions + ' 个会话'))));
@@ -1440,6 +1457,7 @@ window.__ModuleLoader__.load({
     }
     function v3Hay(it) { return [it.title, it.summary, it.name, it.path, it.excerpt, ...(it.tags || [])].filter(Boolean).join(' ').toLowerCase(); }
     const v3Post = (path, body) => api(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body ?? {}) });
+    const v3BaseName = (path) => path.split(/[\\/]/).filter(Boolean).pop() || '';
     function v3Ago(iso) {
       const ms = Date.now() - new Date(iso).getTime();
       if (!iso || !Number.isFinite(ms)) return '';
@@ -1590,7 +1608,7 @@ window.__ModuleLoader__.load({
       else if (state.err === 'update') label = '⚠️ 更新失败 · 重试';
       else if (state.err === 'check' && !state.available) label = '⚠️ 检查失败 · 重试';
       else if (state.available) label = `⬆ 更新到 v${state.latest || '?'}`;
-      else label = `✅ 已是最新版本 v${current} · 检查`;
+      else label = `✅ 已是最新版本 · 检查`;
       const title = state.msg || (state.available ? `点击更新到 v${state.latest}` : '点击重新检查更新');
 
       return h('div', { className: 'fs3-upd' },
@@ -1780,10 +1798,14 @@ window.__ModuleLoader__.load({
       useEffect(() => { api('/workspaces').then(d => setWs(d.workspaces ?? [])).catch(() => {}); }, []);
       const cols = myCollections.filter(c => (seg === 'manual' && ['manual','upload'].includes(c.kind)) || c.kind === seg);
       const create = async () => {
-        if (!form.name.trim() || (newForm !== 'manual' && !form.path.trim())) { alert('名称和路径必填'); return; }
+        const finalName = newForm === 'manual' ? form.name.trim() : v3BaseName(form.path.trim());
+        if (!finalName || (newForm !== 'manual' && !form.path.trim())) { 
+          alert(newForm === 'manual' ? '名称必填' : '路径必填'); 
+          return; 
+        }
         setBusy(true);
         try {
-          await v3Post('/collections', { kind: newForm, name: form.name.trim(), root: form.path.trim(), visibility: 'public' });
+          await v3Post('/collections', { kind: newForm, name: finalName, root: form.path.trim(), visibility: 'public' });
           setForm({ name: '', path: '' }); setNewForm(null);
           onChanged();
         } catch (err) { alert(err.message); } finally { setBusy(false); }
@@ -1808,13 +1830,17 @@ window.__ModuleLoader__.load({
           ['folder', 'project', 'manual'].map(s => h('button', { key: s, className: seg === s ? 'on' : '', onClick: () => { setSeg(s); setNewForm(null); } },
             s === 'folder' ? '📁 文件夹' : s === 'project' ? '🗂️ 项目' : '✍️ 手动'))),
         newForm && h('div', { className: 'fs3-form' },
-          h('label', null, '名称'),
-          h('input', { className: 'fs3-in', value: form.name, onChange: e => setForm(f => ({ ...f, name: e.target.value })), disabled: busy, placeholder: '给这个共享起个名字' }),
+          newForm === 'manual' && [
+            h('label', { key: 'nl' }, '名称'),
+            h('input', { key: 'ni', className: 'fs3-in', value: form.name, onChange: e => setForm(f => ({ ...f, name: e.target.value })), disabled: busy, placeholder: '给这个共享起个名字' }),
+          ],
           newForm !== 'manual' && [
             h('label', { key: 'l' }, newForm === 'folder' ? '路径' : '工作区'),
             h('div', { key: 'inp', style: { display: 'flex', gap: 6 } },
               h('input', { className: 'fs3-in', value: form.path, onChange: e => setForm(f => ({ ...f, path: e.target.value })), disabled: busy, placeholder: newForm === 'folder' ? '本地文件夹路径' : '项目工作区路径', style: { flex: 1 } }),
               h('button', { className: 'fs3-btn', disabled: busy, onClick: () => setPickerMode(newForm) }, '浏览')),
+            form.path.trim() && h('label', { key: 'nl' }, '名称'),
+            form.path.trim() && h('div', { key: 'nv', className: 'fs3-card-sub', style: { margin: 0, alignSelf: 'center' } }, v3BaseName(form.path.trim()) + '（自动使用' + (newForm === 'folder' ? '文件夹名' : '项目名') + '）'),
           ],
           newForm === 'project' && workspaces.length > 0 && [
             h('label', { key: 'l', style: { gridColumn: '1 / -1' } }, '快捷工作区'),
@@ -1823,7 +1849,7 @@ window.__ModuleLoader__.load({
           ],
           h('label', null, ''), h('div', { style: { display: 'flex', gap: 4, justifyContent: 'flex-end' } },
             h('button', { className: 'fs3-btn', disabled: busy, onClick: () => setNewForm(null) }, '取消'),
-            h('button', { className: 'fs3-btn primary', disabled: busy || !form.name.trim() || (newForm !== 'manual' && !form.path.trim()), onClick: create }, newForm === 'folder' ? '新建文件夹共享' : newForm === 'project' ? '新建项目共享' : '新建手动共享'))),
+            h('button', { className: 'fs3-btn primary', disabled: busy || (newForm === 'manual' ? !form.name.trim() : !form.path.trim()), onClick: create }, newForm === 'folder' ? '新建文件夹共享' : newForm === 'project' ? '新建项目共享' : '新建手动共享'))),
         cols.length === 0
           ? h('div', { className: 'fs3-empty' }, '还没有' + (seg === 'folder' ? '共享文件夹。点上面「新建共享」按钮添加。' : seg === 'project' ? '共享会话。点上面「新建共享」按钮添加。' : '手动共享。在「我的共享」中选择项目后，也可点「新建共享」添加为手动共享。'))
           : cols.map(col => h('div', { key: col.id, className: 'fs3-card' },
@@ -1834,8 +1860,8 @@ window.__ModuleLoader__.load({
               h('div', { style: { display: 'flex', gap: 4, marginTop: 8 } },
                 h('button', { className: 'fs3-btn sm', onClick: () => resyncCol(col.id) }, '🔄 重新扫描'),
                 h('button', { className: 'fs3-btn sm danger', onClick: () => confirm('确定删除「' + col.name + '」？') && deleteCol(col.id) }, '🗑 删除')))),
-        pickerMode === 'folder' && h(V3FolderPicker, { initial: form.path, onPick: p => { setForm(f => ({ ...f, path: p })); setPickerMode(null); }, onClose: () => setPickerMode(null) }),
-        pickerMode === 'project' && h(V3ProjectPicker, { onPick: p => { setForm(f => ({ ...f, path: p })); setPickerMode(null); }, onClose: () => setPickerMode(null), onBrowse: () => setPickerMode('folder') }));
+        pickerMode === 'folder' && h(V3FolderPicker, { initial: form.path, onPick: p => { const name = p.split(/[\\/]/).filter(Boolean).pop() || ''; setForm(f => ({ ...f, path: p, name: name })); setPickerMode(null); }, onClose: () => setPickerMode(null) }),
+        pickerMode === 'project' && h(V3ProjectPicker, { onPick: (p, n) => { setForm(f => ({ ...f, path: p, name: n || p.split(/[\\/]/).filter(Boolean).pop() || '' })); setPickerMode(null); }, onClose: () => setPickerMode(null), onBrowse: () => setPickerMode('folder') }));
     }
 
     function PanelV3({ t }) {
