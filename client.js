@@ -1251,7 +1251,7 @@ window.__ModuleLoader__.load({
 
       return h('div', { className: 'fs3-upd' },
         h('span', null, state.available ? '🆕 有新版本' : '✅ 已是最新版'),
-        h('button', { className: 'fs3-btn sm' + (state.available ? '.primary' : ''), disabled: state.checking, onClick: () => state.available ? update() : check(), title: state.msg }, 
+        h('button', { className: 'fs3-btn' + (state.available ? ' primary' : ' sm'), disabled: state.checking, onClick: () => state.available ? update() : check(), title: state.msg }, 
           state.checking ? '更新中…' : state.available ? '更新至 ' + state.version : '检查'),
         state.progress > 0 && state.progress < 100 && h('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } }, state.progress + '%'));
     }
@@ -1506,9 +1506,10 @@ window.__ModuleLoader__.load({
         const id = setInterval(load, 10000);
         return () => clearInterval(id);
       }, []);
+      const t3 = useV3Text(t);
+      const [preview, setPreview] = useState(null);
       if (!status) return h('div', { style: S.page }, t('loading'));
       const tabColor = V3_TABS.find(x => x.id === tab)?.color || '#4f8cff';
-      const t3 = useV3Text(t);
       return h('div', { className: 'fs3', style: { '--tab': tabColor } },
         h('div', { className: 'fs3-top' },
           h('span', { style: { fontSize: 24 } }, '🐟'),
@@ -1521,10 +1522,11 @@ window.__ModuleLoader__.load({
             key: tb.id, className: 'fs3-tab' + (tab === tb.id ? ' on' : ''), onClick: () => setTab(tb.id), style: { '--tab': tb.color },
           }, tb.icon, h('span', null, tb.zh), h('span', { className: 'n' }, tb.id === 'library' ? libGroups.length : tb.id === 'mine' ? myTreeState.data?.items?.length ?? 0 : '')))),
         h('div', { className: 'fs3-body' },
-          tab === 'library' && h(V3LibraryTab, { libGroups, tick, onPreview: () => {} }),
-          tab === 'mine' && h(V3MineTab, { me: status.me, tick, onPreview: () => {}, onChanged: () => setTick(t => t + 1) }),
+          tab === 'library' && h(V3LibraryTab, { libGroups, tick, onPreview: setPreview }),
+          tab === 'mine' && h(V3MineTab, { me: status.me, tick, onPreview: setPreview, onChanged: () => setTick(t => t + 1) }),
           tab === 'settings' && h(V3SettingsTab, { myCollections: myTreeState.data?.collections ?? [], myTreeTick: tick, onChanged: () => setTick(t => t + 1), status }),
-          tab === 'members' && h(V3MembersTab, { status, onRefresh: refresh, onRenamed: () => setTick(t => t + 1) })));
+          tab === 'members' && h(V3MembersTab, { status, onRefresh: refresh, onRenamed: () => setTick(t => t + 1) })),
+        preview && h(PreviewModal, { item: preview, onClose: () => setPreview(null), t }));
     }
 
 
