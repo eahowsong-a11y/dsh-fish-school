@@ -54,6 +54,7 @@ window.__ModuleLoader__.load({
         offline: 'Offline', shareManual: 'Manual', shareUpload: 'Upload', shareName: 'Name', noShares: 'No shares yet.',
         refNoMatch: 'No matches', refKeys: '↑↓ move · Enter insert · Esc close',
         preview: 'Preview', previewClose: 'Close', previewLoading: 'Loading…', previewError: 'Cannot load content',
+        previewRendered: 'Rendered', previewRaw: 'Source',
         tabManual: 'Manual', tabFolder: 'Folders', tabProject: 'Projects',
         folderSyncHint: '🔄 Auto-sync changes', projectSyncHint: '🔄 Auto-sync sessions',
         updateRestart: 'Update complete! Please restart DSH or <a href="javascript:location.reload()" style="color:var(--dsw-alias-brand-primary);text-decoration:underline">reload this page</a>.',
@@ -104,6 +105,7 @@ window.__ModuleLoader__.load({
         offline: '离线', shareManual: '手动', shareUpload: '上传', shareName: '名称', noShares: '还没有共享单元。',
         refNoMatch: '没有匹配项', refKeys: '↑↓ 选择 · Enter 插入 · Esc 关闭',
         preview: '预览', previewClose: '关闭', previewLoading: '加载中…', previewError: '无法加载内容',
+        previewRendered: '渲染', previewRaw: '原文',
         tabManual: '手动发布', tabFolder: '文件夹', tabProject: '项目会话',
         folderSyncHint: '🔄 自动监控文件变化', projectSyncHint: '🔄 自动同步会话',
         updateRestart: '更新完成！页面即将刷新以加载新版本...',
@@ -186,10 +188,291 @@ window.__ModuleLoader__.load({
       }
     }
 
+    // ===== Markdown rendering (file preview) =====
+    // Small self-contained renderer: headings, emphasis, inline code, fences,
+    // lists (nested), blockquotes, tables, links, images and rules. No deps and
+    // no raw HTML passthrough, so shared files cannot inject markup.
+    const MD_CSS = `
+.fs-md{font-size:13.5px;line-height:1.75;color:var(--dsw-alias-label-primary);word-wrap:break-word;overflow-wrap:anywhere}
+.fs-md > :first-child{margin-top:0}
+.fs-md > :last-child{margin-bottom:0}
+.fs-md h1,.fs-md h2,.fs-md h3,.fs-md h4,.fs-md h5,.fs-md h6{margin:20px 0 10px;line-height:1.35;font-weight:650}
+.fs-md h1{font-size:1.55em;padding-bottom:.3em;border-bottom:1px solid var(--dsw-alias-border-l1)}
+.fs-md h2{font-size:1.3em;padding-bottom:.25em;border-bottom:1px solid var(--dsw-alias-border-l1)}
+.fs-md h3{font-size:1.15em}
+.fs-md h4{font-size:1.05em}
+.fs-md h5,.fs-md h6{font-size:1em;color:var(--dsw-alias-label-secondary)}
+.fs-md p{margin:10px 0;white-space:pre-wrap}
+.fs-md a{color:var(--dsw-alias-brand-primary);text-decoration:underline}
+.fs-md strong{font-weight:650}
+.fs-md code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.9em;padding:1px 5px;border-radius:4px;background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l1)}
+.fs-md pre{margin:12px 0;padding:12px 14px;border-radius:8px;overflow:auto;background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l1)}
+.fs-md pre code{padding:0;border:none;background:none;font-size:12.5px;line-height:1.6;white-space:pre}
+.fs-md ul,.fs-md ol{margin:10px 0;padding-left:26px}
+.fs-md li{margin:4px 0}
+.fs-md li > ul,.fs-md li > ol{margin:4px 0}
+.fs-md blockquote{margin:12px 0;padding:6px 14px;border-left:3px solid color-mix(in srgb,var(--dsw-alias-brand-primary) 45%,transparent);background:color-mix(in srgb,var(--dsw-alias-brand-primary) 6%,transparent);color:var(--dsw-alias-label-secondary);border-radius:0 6px 6px 0}
+.fs-md blockquote p{margin:4px 0}
+.fs-md hr{border:none;border-top:1px solid var(--dsw-alias-border-l1);margin:18px 0}
+.fs-md img{max-width:100%;border-radius:6px}
+.fs-md .fs-md-tablewrap{overflow:auto;margin:12px 0}
+.fs-md table{border-collapse:collapse;font-size:12.5px;min-width:60%}
+.fs-md th,.fs-md td{border:1px solid var(--dsw-alias-border-l1);padding:6px 10px;text-align:left;vertical-align:top}
+.fs-md th{background:var(--dsw-alias-bg-layer-2);font-weight:600}
+.fs-md tr:nth-child(2n) td{background:color-mix(in srgb,var(--dsw-alias-bg-layer-2) 55%,transparent)}
+`;
+
+    function useMdStyles() {
+      useEffect(() => {
+        let el = document.getElementById('fs-md-css');
+        if (!el) { el = document.createElement('style'); el.id = 'fs-md-css'; document.head.appendChild(el); }
+        el.textContent = MD_CSS;
+      }, []);
+    }
+
+    function mdSafeUrl(url) {
+      const u = String(url ?? '').trim();
+      return /^(https?:\/\/|mailto:|#|\/|\.{1,2}\/)/i.test(u) ? u : '';
+    }
+
+    function mdInline(text, kp) {
+      const src = String(text ?? '');
+      const re = /(\*\*\*[^*\n]+\*\*\*|`[^`\n]+`|\*\*[^*\n]+\*\*|__[^_\n]+__|~~[^~\n]+~~|\*[^*\n]+\*|_[^_\n]+_|!\[[^\]\n]*\]\([^)\n]+\)|\[[^\]\n]+\]\([^)\n]+\)|<https?:\/\/[^>\s]+>|https?:\/\/[^\s<>()]+)/g;
+      const out = [];
+      let last = 0, m, n = 0;
+      while ((m = re.exec(src)) !== null) {
+        if (m.index > last) out.push(src.slice(last, m.index));
+        const tok = m[0];
+        const key = kp + ':' + (n++);
+        if (tok[0] === '`') {
+          out.push(h('code', { key }, tok.slice(1, -1)));
+        } else if (tok.startsWith('***')) {
+          out.push(h('strong', { key }, h('em', null, mdInline(tok.slice(3, -3), key))));
+        } else if (tok.startsWith('**') || tok.startsWith('__')) {
+          out.push(h('strong', { key }, mdInline(tok.slice(2, -2), key)));
+        } else if (tok.startsWith('~~')) {
+          out.push(h('del', { key }, mdInline(tok.slice(2, -2), key)));
+        } else if (tok[0] === '*' || tok[0] === '_') {
+          out.push(h('em', { key }, mdInline(tok.slice(1, -1), key)));
+        } else if (tok.startsWith('![')) {
+          const mm = /^!\[([^\]]*)\]\(([^)]+)\)$/.exec(tok);
+          const url = mdSafeUrl(mm?.[2]);
+          out.push(url
+            ? h('img', { key, src: url, alt: mm?.[1] ?? '', loading: 'lazy' })
+            : h('span', { key }, mm?.[1] ?? ''));
+        } else if (tok[0] === '[') {
+          const mm = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(tok);
+          const url = mdSafeUrl(mm?.[2]);
+          out.push(url
+            ? h('a', { key, href: url, target: '_blank', rel: 'noreferrer' }, mdInline(mm?.[1] ?? '', key))
+            : h('span', { key }, mm?.[1] ?? tok));
+        } else {
+          const url = tok.replace(/^<|>$/g, '');
+          out.push(h('a', { key, href: url, target: '_blank', rel: 'noreferrer' }, url));
+        }
+        last = m.index + tok.length;
+      }
+      if (last < src.length) out.push(src.slice(last));
+      return out;
+    }
+
+    function mdSplitRow(line) {
+      return String(line).trim().replace(/^\|/, '').replace(/\|$/, '').split(/(?<!\\)\|/).map(c => c.trim().replace(/\\\|/g, '|'));
+    }
+
+    const MD_BLOCK_START = /^(\s*(#{1,6})\s|\s*>|\s*(```|~~~)|\s*([-*+]|\d+[.)])\s)/;
+    const MD_HR = /^\s{0,3}((\*\s*){3,}|(-\s*){3,}|(_\s*){3,})$/;
+    const MD_LI = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/;
+
+    function mdRender(src) {
+      const lines = String(src ?? '').replace(/\r\n?/g, '\n').replace(/\t/g, '    ').split('\n');
+      const nodes = [];
+      let i = 0, key = 0;
+      const nextKey = () => 'md' + (key++);
+      // Skip YAML/TOML frontmatter — it is metadata, not document body.
+      if (lines[0]?.trim() === '---') {
+        for (let j = 1; j < Math.min(lines.length, 80); j++) {
+          if (/^(---|\.\.\.)\s*$/.test(lines[j])) {
+            if (/^[\w-]+\s*:/m.test(lines.slice(1, j).join('\n'))) i = j + 1;
+            break;
+          }
+        }
+      }
+      while (i < lines.length) {
+        const line = lines[i];
+        if (!line.trim()) { i++; continue; }
+
+        // fenced code
+        const fence = /^\s*(`{3,}|~{3,})\s*([^`\n]*)$/.exec(line);
+        if (fence) {
+          const info = (fence[2] || '').trim().split(/\s+/)[0];
+          const close = new RegExp('^\\s*' + fence[1][0].repeat(3) + '\\s*$');
+          const buf = [];
+          i++;
+          while (i < lines.length && !close.test(lines[i])) { buf.push(lines[i]); i++; }
+          i++;
+          nodes.push(h('pre', { key: nextKey() },
+            h('code', { className: info ? 'language-' + info : '' }, buf.join('\n'))));
+          continue;
+        }
+
+        // heading
+        const hd = /^(#{1,6})\s+(.*?)\s*#*\s*$/.exec(line);
+        if (hd) {
+          const lvl = hd[1].length;
+          nodes.push(h('h' + lvl, { key: nextKey() }, mdInline(hd[2], nextKey())));
+          i++; continue;
+        }
+
+        // horizontal rule
+        if (MD_HR.test(line)) { nodes.push(h('hr', { key: nextKey() })); i++; continue; }
+
+        // blockquote
+        if (/^\s{0,3}>/.test(line)) {
+          const buf = [];
+          while (i < lines.length && /^\s{0,3}>/.test(lines[i])) {
+            buf.push(lines[i].replace(/^\s{0,3}>\s?/, ''));
+            i++;
+          }
+          nodes.push(h('blockquote', { key: nextKey() }, mdRender(buf.join('\n'))));
+          continue;
+        }
+
+        // table (header row + delimiter row)
+        if (line.includes('|') && i + 1 < lines.length
+          && /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(lines[i + 1])) {
+          const head = mdSplitRow(line);
+          const aligns = mdSplitRow(lines[i + 1]).map(c =>
+            /^:-+:$/.test(c) ? 'center' : /^:-+$/.test(c) ? 'left' : /^-+:$/.test(c) ? 'right' : '');
+          if (aligns.length !== head.length) { // not a table: fall through to a paragraph
+          } else {
+            i += 2;
+            const rows = [];
+            while (i < lines.length && lines[i].trim() && lines[i].includes('|')) {
+              rows.push(mdSplitRow(lines[i]));
+              i++;
+            }
+            const cell = (tag, text, ci, rk) => h(tag, {
+              key: rk + ':' + ci,
+              style: aligns[ci] ? { textAlign: aligns[ci] } : undefined,
+            }, mdInline(text ?? '', rk + ':' + ci));
+            nodes.push(h('div', { key: nextKey(), className: 'fs-md-tablewrap' },
+              h('table', null,
+                h('thead', null, h('tr', null, head.map((c, ci) => cell('th', c, ci, 'h')))),
+                h('tbody', null, rows.map((r, ri) => h('tr', { key: 'r' + ri },
+                  head.map((_, ci) => cell('td', r[ci], ci, 'r' + ri))))))));
+            continue;
+          }
+        }
+
+        // list (with nested indentation)
+        const firstLi = MD_LI.exec(line);
+        if (firstLi) {
+          const baseIndent = firstLi[1].length;
+          const ordered = /\d/.test(firstLi[2]);
+          const items = [];
+          while (i < lines.length) {
+            const m = MD_LI.exec(lines[i]);
+            if (m) {
+              if (m[1].length < baseIndent) break;
+              if (m[1].length > baseIndent) {
+                if (!items.length) break;
+                // Collect the nested block up to the next item at <= baseIndent.
+                const nested = [];
+                let j = i;
+                while (j < lines.length) {
+                  const nm = MD_LI.exec(lines[j]);
+                  if (nm && nm[1].length <= baseIndent) break;
+                  if (!lines[j].trim()) {
+                    // keep nested block together only while it continues
+                    let k = j + 1;
+                    while (k < lines.length && !lines[k].trim()) k++;
+                    const km = MD_LI.exec(lines[k] ?? '');
+                    if (!(km && km[1].length > baseIndent)) break;
+                  }
+                  nested.push(lines[j]);
+                  j++;
+                }
+                items[items.length - 1].children = items[items.length - 1].children.concat(mdRender(nested.join('\n')));
+                i = j;
+                continue;
+              }
+              items.push({ text: m[3], children: [] });
+              i++;
+              continue;
+            }
+            if (!lines[i].trim()) {
+              let j = i + 1;
+              while (j < lines.length && !lines[j].trim()) j++;
+              const nm = MD_LI.exec(lines[j] ?? '');
+              if (nm && nm[1].length >= baseIndent) { i = j; continue; }
+              break;
+            }
+            if (items.length && /^\s{2,}/.test(lines[i])) {
+              items[items.length - 1].text += '\n' + lines[i].trim();
+              i++;
+              continue;
+            }
+            break;
+          }
+          nodes.push(h(ordered ? 'ol' : 'ul', { key: nextKey() },
+            items.map((it, idx) => {
+              const children = [];
+              it.text.split('\n').forEach((ln, li2) => {
+                if (li2) children.push(h('br', { key: 'br' + idx + '-' + li2 }));
+                children.push(...mdInline(ln, 'li' + idx + '-' + li2));
+              });
+              return h('li', { key: 'i' + idx }, children, it.children);
+            })));
+          continue;
+        }
+
+        // paragraph
+        const para = [line];
+        i++;
+        while (i < lines.length && lines[i].trim() && !MD_BLOCK_START.test(lines[i])
+          && !MD_HR.test(lines[i]) && !MD_LI.test(lines[i])) {
+          para.push(lines[i]);
+          i++;
+        }
+        nodes.push(h('p', { key: nextKey() }, mdInline(para.join('\n'), nextKey())));
+      }
+      return nodes;
+    }
+
+    function mdLooksLike(text) {
+      if (typeof text !== 'string' || !text.trim()) return false;
+      const s = text.slice(0, 20000);
+      let score = 0;
+      // A lone "# comment" line is common in code and configs, so a heading
+      // alone must not be enough: require one more structural marker.
+      if (/^#{1,6}\s+\S/m.test(s)) score += 2;
+      if (/^\s*```/m.test(s)) score += 1;
+      if (/^[-*+]\s+\S/m.test(s)) score += 1;
+      if (/^\d+[.)]\s+\S/m.test(s)) score += 1;
+      if (/\[[^\]\n]+\]\([^)\n]+\)/.test(s)) score += 1;
+      if (/^\s*\|.+\|\s*$/m.test(s)) score += 1;
+      if (/^>\s+\S/m.test(s)) score += 1;
+      if (/\*\*[^*\n]+\*\*/.test(s)) score += 1;
+      return score >= 3;
+    }
+
+    function isMarkdownItem(item, data) {
+      if (!item || item.type === 'conversation') return false;
+      const names = [item.name, item.path, data?.item?.name, data?.item?.path, data?.item?.summary]
+        .filter(v => typeof v === 'string' && v);
+      for (const nm of names) {
+        if (/\.(md|markdown|mdown|mdx)$/i.test(nm.trim())) return true;
+      }
+      return mdLooksLike(data?.content);
+    }
+
     // Preview Modal Component
     function PreviewModal({ item, onClose, t }) {
       const [data, setData] = useState(null);
       const [loading, setLoading] = useState(true);
+      const [raw, setRaw] = useState(false);
+      useMdStyles();
 
       useEffect(() => {
         const fishId = item.remote ? item.authorId : '';
@@ -204,12 +487,16 @@ window.__ModuleLoader__.load({
           });
       }, [item]);
 
+      const markdown = Boolean(data?.content) && isMarkdownItem(item, data);
+      const showRendered = markdown && !raw;
+      const bodyStyle = { maxHeight: '62vh', overflowY: 'auto', paddingRight: 6 };
+
       const renderContent = () => {
         if (loading) return h('div', { style: { textAlign: 'center', padding: 40 } }, t('previewLoading'));
         if (data?.error) return h('div', { style: { color: 'var(--dsw-alias-state-error-primary)', padding: 20 } }, t('previewError') + ': ' + data.error);
 
         if (data?.messages && Array.isArray(data.messages)) {
-          return h('div', { style: { maxHeight: '60vh', overflowY: 'auto' } },
+          return h('div', { style: bodyStyle },
             data.messages.map((msg, idx) =>
               h('div', { key: idx, style: { marginBottom: 16, padding: 12, background: 'var(--dsw-alias-bg-layer-2)', borderRadius: 8 } },
                 h('div', { style: { fontSize: 11, ...S.muted, marginBottom: 6, textTransform: 'uppercase' } }, msg.role),
@@ -220,8 +507,10 @@ window.__ModuleLoader__.load({
         }
 
         if (data?.content) {
-          return h('div', { style: { maxHeight: '60vh', overflowY: 'auto' } },
-            h('pre', { style: { whiteSpace: 'pre-wrap', fontSize: 13, margin: 0 } }, data.content)
+          return h('div', { style: bodyStyle },
+            showRendered
+              ? h('div', { className: 'fs-md' }, mdRender(data.content))
+              : h('pre', { style: { whiteSpace: 'pre-wrap', fontSize: 13, margin: 0 } }, data.content)
           );
         }
 
@@ -239,16 +528,25 @@ window.__ModuleLoader__.load({
         h('div', {
           style: {
             background: 'var(--dsw-alias-bg-base)', borderRadius: 12,
-            padding: 24, maxWidth: '80%', maxHeight: '85%', overflow: 'hidden',
+            padding: 24, width: markdown ? 'min(900px, 92vw)' : 'min(720px, 90vw)',
+            maxHeight: '88%', overflow: 'hidden',
             boxShadow: '0 8px 32px rgba(0,0,0,0.4)', display: 'flex', flexDirection: 'column',
-            minWidth: 400
           },
           onClick: e => e.stopPropagation()
         },
           h('div', { style: { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, paddingBottom: 12, borderBottom: '1px solid var(--dsw-alias-border-l1)' } },
             h('span', { style: { fontSize: 20 } }, item.type === 'conversation' ? '💬' : item.type === 'file' ? '📎' : '📄'),
-            h('h3', { style: { margin: 0, flex: 1, fontSize: 16, fontWeight: 600 } }, itemTitle(item)),
-            h('button', { style: { ...S.btn, padding: '4px 12px' }, onClick: onClose }, t('previewClose'))
+            h('h3', { style: { margin: 0, flex: 1, fontSize: 16, fontWeight: 600, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, itemTitle(item)),
+            markdown && h('span', { style: { display: 'inline-flex', gap: 2, padding: 2, borderRadius: 6, background: 'var(--dsw-alias-bg-layer-2)', flexShrink: 0 } },
+              h('button', {
+                type: 'button', onClick: () => setRaw(false),
+                style: { ...S.btnSmall, border: 'none', background: raw ? 'transparent' : 'var(--dsw-alias-bg-base)', color: raw ? 'var(--dsw-alias-label-secondary)' : 'var(--dsw-alias-label-primary)' },
+              }, t('previewRendered')),
+              h('button', {
+                type: 'button', onClick: () => setRaw(true),
+                style: { ...S.btnSmall, border: 'none', background: raw ? 'var(--dsw-alias-bg-base)' : 'transparent', color: raw ? 'var(--dsw-alias-label-primary)' : 'var(--dsw-alias-label-secondary)' },
+              }, t('previewRaw'))),
+            h('button', { style: { ...S.btn, padding: '4px 12px', flexShrink: 0 }, onClick: onClose }, t('previewClose'))
           ),
           h('div', { style: { fontSize: 12, ...S.muted, marginBottom: 12 } },
             item.author, item.path ? ` · ${item.path}` : '', item.messageCount ? ` · ${item.messageCount} msgs` : ''
@@ -1172,6 +1470,11 @@ window.__ModuleLoader__.load({
 .fs3-top h1{font-size:18px;font-weight:600;margin:0}
 .fs3-ver{font-size:14px;font-weight:600;padding:3px 10px;border-radius:999px;background:var(--dsw-alias-bg-layer-2);font-variant-numeric:tabular-nums}
 .fs3-upd{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--dsw-alias-label-secondary)}
+.fs3-updbtn{display:inline-flex;align-items:center;gap:4px;padding:5px 13px;border-radius:999px;border:1px solid color-mix(in srgb,var(--dsw-alias-brand-primary) 32%,var(--dsw-alias-border-l1));background:color-mix(in srgb,var(--dsw-alias-brand-primary) 7%,transparent);color:color-mix(in srgb,var(--dsw-alias-brand-primary) 88%,var(--dsw-alias-label-primary));cursor:pointer;font:inherit;font-size:12px;font-weight:500;white-space:nowrap;font-variant-numeric:tabular-nums;transition:background .15s,border-color .15s}
+.fs3-updbtn:hover:not(:disabled){background:color-mix(in srgb,var(--dsw-alias-brand-primary) 14%,transparent);border-color:color-mix(in srgb,var(--dsw-alias-brand-primary) 55%,transparent)}
+.fs3-updbtn:disabled{opacity:.65;cursor:default}
+.fs3-updbtn.new{border-color:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 55%,transparent);background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 14%,transparent);color:var(--dsw-alias-state-warn-primary);font-weight:600}
+.fs3-updbtn.new:hover:not(:disabled){background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 22%,transparent)}
 .fs3-tabs{display:flex;gap:6px;padding:12px 24px 0;border-bottom:1px solid var(--dsw-alias-border-l1)}
 .fs3-tab{display:flex;align-items:center;gap:6px;padding:9px 18px;font-size:13px;cursor:pointer;border:1px solid color-mix(in srgb,var(--tab) 35%,var(--dsw-alias-border-l1));border-bottom:none;border-radius:8px 8px 0 0;background:color-mix(in srgb,var(--tab) 6%,transparent);color:var(--dsw-alias-label-secondary);margin-bottom:-1px}
 .fs3-tab:hover{background:color-mix(in srgb,var(--tab) 12%,transparent)}
@@ -1218,42 +1521,80 @@ window.__ModuleLoader__.load({
       }, []);
     }
 
-    // Auto-check for updates on mount and periodically
+    // One combined pill in the header: version status and the check/update action.
     function V3UpdateBadge({ t, status, onUpdated }) {
-      const [state, setState] = useState({ available: false, version: status.version, checking: false, msg: '', progress: 0 });
-      
-      const check = useCallback(async () => {
-        setState(s => ({ ...s, checking: true, msg: '' }));
+      const [state, setState] = useState({
+        phase: 'checking', available: false, current: status.version || '', latest: '', msg: '', err: '', progress: 0,
+      });
+      const updatingRef = useRef(false);
+
+      const check = useCallback(async (force = false) => {
+        if (updatingRef.current) return;
+        setState(s => ({ ...s, phase: 'checking', msg: '', err: '' }));
         try {
-          const d = await api('/check-update');
-          if (d.error) { setState(s => ({ ...s, checking: false, msg: d.error })); return; }
-          setState(s => ({ ...s, available: d.hasUpdate, version: d.latest || d.current, checking: false }));
-        } catch (e) { setState(s => ({ ...s, checking: false, msg: e.message })); }
+          const d = await api('/check-update' + (force ? '?refresh=1' : ''));
+          if (updatingRef.current) return;
+          if (d?.error) { setState(s => ({ ...s, phase: 'idle', msg: d.error, err: 'check' })); return; }
+          setState(s => ({ ...s, phase: 'idle', available: Boolean(d?.hasUpdate),
+            current: d?.current || s.current, latest: d?.latest || '', msg: '', err: '' }));
+        } catch (e) {
+          if (!updatingRef.current) setState(s => ({ ...s, phase: 'idle', msg: e.message, err: 'check' }));
+        }
       }, []);
 
       const update = useCallback(async () => {
-        if (!state.available) return;
-        setState(s => ({ ...s, checking: true, msg: '更新中…' }));
+        if (updatingRef.current) return;
+        updatingRef.current = true;
+        setState(s => ({ ...s, phase: 'updating', msg: '', err: '', progress: 0 }));
         try {
           await v3Post('/update', {});
           for (let i = 0; i < 60; i++) {
             const s = await api('/update/status').catch(() => null);
-            if (s?.state === 'done') { setState(st => ({ ...st, available: false, progress: 100, msg: '已更新，页面即将刷新' })); setTimeout(() => location.reload(), 1000); return; }
-            if (s?.state === 'error') { setState(st => ({ ...st, msg: '更新失败：' + s.message, checking: false })); return; }
+            if (s?.state === 'done') {
+              updatingRef.current = false;
+              setState(st => ({ ...st, phase: 'done', available: false, progress: 100, err: '',
+                msg: '已更新到 v' + st.latest + '，正在刷新' }));
+              onUpdated?.();
+              setTimeout(() => location.reload(), 1200);
+              return;
+            }
+            if (s?.state === 'error') {
+              updatingRef.current = false;
+              setState(st => ({ ...st, phase: 'idle', err: 'update',
+                msg: '更新失败：' + (s.message || '未知错误') }));
+              return;
+            }
             setState(st => ({ ...st, progress: Math.round(((i + 1) / 60) * 100) }));
             await new Promise(r => setTimeout(r, 2000));
           }
-          setState(s => ({ ...s, checking: false, msg: '更新超时' }));
-        } catch (e) { setState(s => ({ ...s, checking: false, msg: e.message })); }
-      }, [state.available]);
+          updatingRef.current = false;
+          setState(s => ({ ...s, phase: 'idle', err: 'update', msg: '更新超时，请稍后重试' }));
+        } catch (e) {
+          updatingRef.current = false;
+          setState(s => ({ ...s, phase: 'idle', err: 'update', msg: '更新失败：' + e.message }));
+        }
+      }, [onUpdated]);
 
-      useEffect(() => { check(); const id = setInterval(check, 180000); return () => clearInterval(id); }, [check]);
+      useEffect(() => { check(false); const id = setInterval(() => check(true), 180000); return () => clearInterval(id); }, [check]);
+
+      const busy = state.phase === 'checking' || state.phase === 'updating';
+      const current = state.current || status.version || '?';
+      let label;
+      if (state.phase === 'checking') label = '检查中…';
+      else if (state.phase === 'updating') label = state.progress > 0 ? `更新中… ${state.progress}%` : '更新中…';
+      else if (state.phase === 'done') label = '✅ ' + state.msg;
+      else if (state.err === 'update') label = '⚠️ 更新失败 · 重试';
+      else if (state.err === 'check' && !state.available) label = '⚠️ 检查失败 · 重试';
+      else if (state.available) label = `⬆ 更新到 v${state.latest || '?'}`;
+      else label = `✅ 已是最新版本 v${current} · 检查`;
+      const title = state.msg || (state.available ? `点击更新到 v${state.latest}` : '点击重新检查更新');
 
       return h('div', { className: 'fs3-upd' },
-        h('span', null, state.available ? '🆕 有新版本' : '✅ 已是最新版'),
-        h('button', { className: 'fs3-btn' + (state.available ? ' primary' : ' sm'), disabled: state.checking, onClick: () => state.available ? update() : check(), title: state.msg }, 
-          state.checking ? '更新中…' : state.available ? '更新至 ' + state.version : '检查'),
-        state.progress > 0 && state.progress < 100 && h('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } }, state.progress + '%'));
+        h('button', {
+          type: 'button', title, disabled: busy,
+          className: 'fs3-updbtn' + (state.available && !state.err && state.phase === 'idle' ? ' new' : ''),
+          onClick: () => (state.available && state.phase === 'idle' ? update() : check(true)),
+        }, label));
     }
 
     // fish → 共享文件夹 / 共享会话 / 手动共享 → share → nested subfolders → items.
