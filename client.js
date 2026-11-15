@@ -375,6 +375,7 @@ window.__ModuleLoader__.load({
             const m = MD_LI.exec(lines[i]);
             if (m) {
               if (m[1].length < baseIndent) break;
+              if (m[1].length === baseIndent && /\d/.test(m[2]) !== ordered) break; // <ul> vs <ol>
               if (m[1].length > baseIndent) {
                 if (!items.length) break;
                 // Collect the nested block up to the next item at <= baseIndent.
@@ -405,7 +406,10 @@ window.__ModuleLoader__.load({
               let j = i + 1;
               while (j < lines.length && !lines[j].trim()) j++;
               const nm = MD_LI.exec(lines[j] ?? '');
-              if (nm && nm[1].length >= baseIndent) { i = j; continue; }
+              if (nm && nm[1].length >= baseIndent) {
+                if (nm[1].length === baseIndent && /\d/.test(nm[2]) !== ordered) break; // list kind changed
+                i = j; continue;
+              }
               break;
             }
             if (items.length && /^\s{2,}/.test(lines[i])) {

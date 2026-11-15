@@ -94,6 +94,13 @@ const walk = (nodes, out = []) => {
     JSON.stringify(code?.props));
 }
 
+// ordered and unordered lists stay separate
+{
+  const nodes = mdRender('- a\n- b\n\n1. one\n2. two');
+  ok('ul then ol', nodes[0]?.type === 'ul' && nodes[1]?.type === 'ol',
+    JSON.stringify(nodes.map(n => n.type)));
+}
+
 // frontmatter is skipped, content still renders
 {
   const nodes = mdRender('---\ntitle: 测试\ntags: [a, b]\n---\n\n# Body\n\ntext');
