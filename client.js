@@ -4,7 +4,7 @@ window.__ModuleLoader__.load({
   factory(require) {
     const React = require('react');
     const h = React.createElement;
-    const { useState, useEffect, useCallback, useRef } = React;
+    const { useState, useEffect, useCallback, useRef, useMemo } = React;
     const NS = 'fish-school';
     const API = '/fish-school/v1';
 
@@ -1332,36 +1332,48 @@ window.__ModuleLoader__.load({
     }
 
 
+    // One remote fish inside the shared library; owns its own expand + load state.
+    function V3FishNode({ v3t, fish, q, onPreview, tick }) {
+      const [expanded, setExpanded] = useState(false);
+      const open = expanded || Boolean(q);
+      const { data, error, loading } = useFishTree(fish.id, open && fish.online !== false, tick);
+      if (q && data && !(data.items ?? []).some(it => v3Hay(it).includes(q))) return null;
+      return h('div', null,
+        h(V3Row, { depth: 0, open, icon: '🐟', label: fish.name, q,
+          meta: h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 4 } },
+            h('span', { className: 'fs3-dot' + (fish.online ? ' on' : '') }), fish.itemCount ?? ''),
+          onClick: () => setExpanded(v => !v) }),
+        open && (fish.online === false && !data
+          ? h('div', { className: 'fs3-note', style: { paddingLeft: 28 } }, v3t('offline'))
+          : loading && !data ? h('div', { className: 'fs3-note', style: { paddingLeft: 28 } }, v3t('loading'))
+          : error && !data ? h('div', { className: 'fs3-err', style: { paddingLeft: 28 } }, error)
+          : data ? h(V3ShareTree, { v3t, data, q, self: false, onPreview, keyPrefix: fish.id + '|' }) : null));
+    }
+
     // Column 1: Shared library (remote fish)
-    function V3LibraryColumn({ v3t, libGroups, libSearch, onPreview, tick }) {
+    function V3LibraryColumn({ v3t, libGroups, onPreview, tick }) {
+      const [search, setSearch] = useState('');
+      const q = search.trim().toLowerCase();
       return h('div', { className: 'fs3-col' },
         h('div', { className: 'fs3-head' },
-          h('div', { className: 'fs3-h' }, v3t('colLibrary')),
-          h('input', { className: 'fs3-in', placeholder: v3t('search'), value: libSearch, onChange: e => e.target.value })
+          h('div', { className: 'fs3-h' }, '📚 ', v3t('colLibrary'), h('span', { className: 'fs3-count' }, libGroups.length)),
+          h('input', { className: 'fs3-in', placeholder: v3t('search'), value: search, onChange: e => setSearch(e.target.value) })
         ),
         h('div', { className: 'fs3-body' },
           libGroups.length === 0 ? h('div', { className: 'fs3-empty' }, v3t('noFish'))
-          : libGroups.map(fish => {
-              const [expanded, setExpanded] = useState(false);
-              const { data, error, loading } = useFishTree(fish.id, expanded, tick);
-              return h('div', { key: fish.id },
-                h(V3Row, { depth: 0, open: expanded, icon: '🐟', label: fish.name, meta: fish.online ? v3t('online') : v3t('offline'),
-                  onClick: () => setExpanded(!expanded) }),
-                expanded && (loading ? h('div', { className: 'fs3-note', style: { paddingLeft: 32 } }, v3t('loading'))
-                  : error ? h('div', { className: 'fs3-err', style: { paddingLeft: 32 } }, error)
-                  : h(V3ShareTree, { v3t, data, q: libSearch, self: false, onPreview, onChanged: () => {}, keyPrefix: fish.id + '/' })));
-            })
-        )
+          : libGroups.map(fish => h(V3FishNode, { key: fish.id, v3t, fish, q, onPreview, tick })))
       );
     }
 
     // Column 2: My shares (self tree)
-    function V3MineColumn({ v3t, myTree, myTreeTick, mineSearch, onPreview, onChanged }) {
+    function V3MineColumn({ v3t, myTree, onPreview, onChanged }) {
       const { data, error, loading } = myTree;
+      const [search, setSearch] = useState('');
+      const mineSearch = search.trim().toLowerCase();
       return h('div', { className: 'fs3-col' },
         h('div', { className: 'fs3-head' },
-          h('div', { className: 'fs3-h' }, v3t('colMine')),
-        h('input', { className: 'fs3-in', placeholder: v3t('search'), value: mineSearch, onChange: e => e.target.value })
+          h('div', { className: 'fs3-h' }, '📤 ', v3t('colMine'), h('span', { className: 'fs3-count' }, data?.items?.length ?? '')),
+          h('input', { className: 'fs3-in', placeholder: v3t('search'), value: search, onChange: e => setSearch(e.target.value) })
         ),
         h('div', { className: 'fs3-body' },
           loading && !data ? h('div', { className: 'fs3-empty' }, v3t('loading'))
