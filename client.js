@@ -1583,6 +1583,9 @@ window.__ModuleLoader__.load({
 
       const myId = status.me.id;
 
+      // 2.5.0: the four-column workspace replaces the tabbed page below.
+      if (!window.__fishSchoolClassic) return h(PanelV3, { t });
+
       return h('div', { style: S.page },
         h('div', { style: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 20 } },
           h('div', null,
