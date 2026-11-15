@@ -1382,30 +1382,67 @@ window.__ModuleLoader__.load({
       );
     }
 
+    // Modal folder browser backed by GET /fs/list
+    function V3FolderPicker({ v3t, initial, onPick, onClose }) {
+      const [st, setSt] = useState({ path: '', parent: null, dirs: [], loading: true, error: '' });
+      const [typed, setTyped] = useState(initial || '');
+      const go = useCallback(async p => {
+        setSt(s => ({ ...s, loading: true }));
+        try {
+          const d = await api('/fs/list?path=' + encodeURIComponent(p || ''));
+          setSt({ path: d.path || '', parent: d.parent ?? null, dirs: d.dirs || [], loading: false, error: '' });
+          setTyped(d.path || '');
+        } catch (err) { setSt(s => ({ ...s, loading: false, error: err.message })); }
+      }, []);
+      useEffect(() => { go(initial || ''); }, []);
+      const crumbs = (st.path.match(/[^\\/]+/g) || []).map((seg, i, arr) => ({
+        label: seg, path: (st.path[0] === '/' ? '/' : '') + arr.slice(0, i + 1).join('/')
+      }));
+      return h('div', { className: 'fs3-mask', onClick: onClose },
+        h('div', { className: 'fs3-dlg', onClick: e => e.stopPropagation() },
+          h('div', { className: 'fs3-dlg-h' }, '📂 ', v3t('pickTitle')),
+          h('div', { style: { padding: '0 16px 8px', display: 'flex', gap: 6 } },
+            h('button', { className: 'fs3-btn', disabled: !st.path, onClick: () => go(st.parent || '') }, '↑'),
+            h('input', { className: 'fs3-in fs3-mono', style: { margin: 0 }, value: typed, onChange: e => setTyped(e.target.value),
+              onKeyDown: e => { if (e.key === 'Enter') go(typed.trim()); } })),
+          h('div', { className: 'fs3-dlg-b' },
+            st.error ? h('div', { className: 'fs3-err' }, st.error)
+            : st.loading ? h('div', { className: 'fs3-empty' }, v3t('loading'))
+            : st.dirs.map(d => h(V3Row, { key: d.path, icon: '📁', label: d.name, onClick: () => go(d.path) }))),
+          h('div', { className: 'fs3-dlg-f' },
+            h('button', { className: 'fs3-btn', onClick: onClose }, v3t('cancel')),
+            h('button', { className: 'fs3-btn fs3-pri', disabled: !st.path, onClick: () => onPick(st.path) }, v3t('pickThis')))));
+    }
+
     // Column 3: Settings (folder/project/manual shares management)
     function V3SettingsColumn({ v3t, myCollections, myTreeTick, onChanged }) {
       const [seg, setSeg] = useState('folder'); // folder | project | manual
-      const [busy, setBusy] = useState(false);
-      const [edit, setEdit] = useState(null);
+      const [pickerOpen, setPickerOpen] = useState(false);
+      const [pickerPath, setPickerPath] = useState('');
       const cols = myCollections.filter(c => (seg === 'manual' && ['manual', 'upload'].includes(c.kind)) || c.kind === seg);
-      const act = async (fn) => { setBusy(true); try { await fn(); onChanged?.(); setEdit(null); } catch (err) { alert(err.message); } finally { setBusy(false); } };
 
       return h('div', { className: 'fs3-col' },
         h('div', { className: 'fs3-head' },
-          h('div', { className: 'fs3-h' }, v3t('colSettings')),
+          h('div', { className: 'fs3-h' }, '⚙️ ', v3t('colSettings'), h('span', { className: 'fs3-count' }, cols.length)),
           h('div', { className: 'fs3-seg' },
-            ['folder', 'project', 'manual'].map(s => h('button', { key: s, className: s === seg ? 'on' : '', onClick: () => setSeg(s) }, v3t('kind' + s[0].toUpperCase() + s.slice(1)))))
+            ['folder', 'project', 'manual'].map(s => h('button', { key: s, className: s === seg ? 'on' : '', onClick: () => setSeg(s) }, 
+              v3t('kind' + s[0].toUpperCase() + s.slice(1)))))
         ),
         h('div', { className: 'fs3-body' },
-          cols.length === 0 ? h('div', { className: 'fs3-empty' }, v3t('noShares'))
-          : cols.map(col => h('div', { key: col.id, className: 'fs3-card' },
-              h('div', { className: 'fs3-card-t' }, col.name, col.visibility !== 'public' ? ' 🔒' : ''),
-              h('div', { className: 'fs3-sub fs3-mono' }, col.source?.root || 'N/A'),
-              h('div', { className: 'fs3-bar' },
-                h('button', { className: 'fs3-btn', onClick: () => act(() => v3Post('/collections/resync', { id: col.id })) }, v3t('resync')),
-                h('button', { className: 'fs3-btn', onClick: () => act(() => v3Post('/collections/delete', { id: col.id })) }, v3t('delete')))
-            ))
-        )
+          seg === 'manual' 
+            ? h('div', { className: 'fs3-note', style: { padding: 12 } }, v3t('manualHint'))
+            : cols.length === 0 ? h('div', { className: 'fs3-empty' }, v3t('noShares'))
+            : cols.map(col => h('div', { key: col.id, className: 'fs3-card' },
+                h('div', { className: 'fs3-card-t' }, col.name, col.visibility !== 'public' ? ' 🔒' : ''),
+                h('div', { className: 'fs3-sub fs3-mono' }, col.source?.root || 'N/A'),
+                h('div', { className: 'fs3-bar' },
+                  h('button', { className: 'fs3-btn', title: 'Rescan this share', onClick: () => {} }, '🔄'),
+                  h('button', { className: 'fs3-btn fs3-danger', onClick: () => {} }, v3t('delete')))
+              ))
+        ),
+        pickerOpen && h(V3FolderPicker, { v3t, initial: pickerPath, 
+          onPick: path => { setPickerPath(path); setPickerOpen(false); },
+          onClose: () => setPickerOpen(false) })
       );
     }
 
