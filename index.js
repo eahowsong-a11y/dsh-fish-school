@@ -2,7 +2,7 @@
  * Fish School Plugin v2.0 — Main Host Entry Point
  */
 import { join } from 'node:path';
-import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { createStore } from './lib/store.js';
 import { startNetwork } from './lib/network.js';
 import { createFolderIndexer } from './lib/folder-indexer.js';
@@ -137,9 +137,11 @@ export function apply(ctx, config = {}) {
 
   function stopMgr(colId) {
     const fm = folderMgrs.get(colId);
-    if (fm?.indexer) { try { fm.indexer.stop(); } catch {} folderMgrs.delete(colId); }
+    if (fm?.indexer) try { fm.indexer.stop(); } catch {}
+    folderMgrs.delete(colId);
     const pm = projectMgrs.get(colId);
-    if (pm?.sync) { try { pm.sync.stop(); } catch {} projectMgrs.delete(colId); }
+    if (pm?.sync) try { pm.sync.stop(); } catch {}
+    projectMgrs.delete(colId);
   }
 
   function getSyncStatus(colId) {
@@ -413,6 +415,45 @@ export function apply(ctx, config = {}) {
       },
     }));
 
+    // GET /tree — every item of one fish (lightweight), for the folder tree views
+    const liteItem = (i, extra = {}) => ({
+      id: i.id, type: i.type, collectionId: i.collectionId, path: i.path, name: i.name,
+      title: i.title, summary: i.summary, tags: i.tags ?? [], messageCount: i.messageCount,
+      size: i.size, updatedAt: i.updatedAt ?? i.createdAt, author: i.author, authorId: i.authorId,
+      isPublic: i.isPublic !== false,
+      excerpt: typeof i.excerpt === 'string' ? i.excerpt.slice(0, 240) : '', ...extra,
+    });
+    ctx.effect(() => webServer.register({ kind: 'exact', path: '/fish-school/v1/tree',
+      async handler(req, res) {
+        const rej = auth(req); if (rej) return send(res, rej, { error: 'unauthorized' });
+        if (req.method !== 'GET') return send(res, 405, { error: 'method not allowed' });
+        try {
+          const url = new URL(req.url ?? '/', 'http://local');
+          const fishId = url.searchParams.get('fish');
+          const me = store.identity();
+          if (!fishId || fishId === me.id) {
+            const collections = store.listCollections({ includePrivate: true })
+              .map(c => ({ ...c, sync: getSyncStatus(c.id) }));
+            const items = [...store.itemMap.values()].map(i => liteItem(i, {
+              author: me.name, authorId: me.id, effectivePublic: store.effectivePublic(i) }));
+            return send(res, 200, { fish: { id: me.id, name: me.name, self: true, online: true }, collections, items });
+          }
+          const peer = network.listPeers().find(p => (p.id ?? `${p.address}:${p.port}`) === fishId);
+          if (!peer) return send(res, 404, { error: 'Fish not found' });
+          const key = peer.id ?? `${peer.address}:${peer.port}`;
+          let cache = network.getManifestCache(key);
+          if (!cache || Date.now() - (cache.fetchedAt ?? 0) > 10000) {
+            const fresh = await network.fetchPeerManifest(peer).catch(() => null);
+            if (fresh) cache = fresh;
+          }
+          // Never forward a peer's local filesystem path.
+          const collections = (cache?.collections ?? []).map(c => ({ ...c, source: undefined }));
+          const items = [...(cache?.items?.values?.() ?? [])].map(i => liteItem(i));
+          return send(res, 200, { fish: { id: key, name: peer.name, self: false, online: peer.online }, collections, items });
+        } catch (err) { return send(res, 500, { error: err.message }); }
+      },
+    }));
+
     // GET /item — single item with content
     ctx.effect(() => webServer.register({ kind: 'exact', path: '/fish-school/v1/item',
       async handler(req, res) {
@@ -449,6 +490,13 @@ export function apply(ctx, config = {}) {
         if (req.method === 'POST') {
           try {
             const b = await readBody(req);
+            // Validate root path exists and is a directory
+            if ((b.kind === 'folder' || b.kind === 'project') && b.root) {
+              const root = String(b.root).trim();
+              if (!existsSync(root)) throw new Error('路径不存在');
+              const stat = statSync(root);
+              if (!stat.isDirectory()) throw new Error('路径不是目录');
+            }
             const col = store.createCollection({ kind: b.kind, name: b.name, visibility: b.visibility, source: b.root ? { root: b.root } : null });
             if (col.kind === 'folder') startFolderMgr(col);
             else if (col.kind === 'project') startProjectMgr(col);
@@ -464,8 +512,22 @@ export function apply(ctx, config = {}) {
         const rej = auth(req); if (rej) return send(res, rej, { error: 'unauthorized' });
         if (req.method !== 'POST') return send(res, 405, { error: 'method not allowed' });
         try {
-          const { id, ...patch } = await readBody(req);
+          const { id, root, ...patch } = await readBody(req);
+          const before = store.getCollection(id);
+          const rootChanged = typeof root === 'string' && root.trim() && root.trim() !== before?.source?.root;
+          if (rootChanged) {
+            if (before.kind === 'folder' && !existsSync(root.trim())) throw new Error('路径不存在');
+            patch.source = { ...(before.source ?? {}), root: root.trim() };
+          }
           const col = store.updateCollection(id, patch);
+          if (rootChanged) {
+            // Drop items indexed from the old root, then restart the sync manager on the new one.
+            stopMgr(id);
+            for (const it of [...store.itemMap.values()]) if (it.collectionId === id) store.remove(it.id);
+            store.recomputeStats(id);
+            if (col.kind === 'folder') startFolderMgr(col);
+            else if (col.kind === 'project') startProjectMgr(col);
+          }
           return send(res, 200, { collection: { ...col, sync: getSyncStatus(col.id) } });
         } catch (err) { return send(res, 400, { error: err.message }); }
       },
@@ -511,24 +573,27 @@ export function apply(ctx, config = {}) {
         const { readdirSync: rd, statSync } = await import('node:fs');
         try {
           if (!reqPath) {
-            // List common root options
+            // Shortcuts plus every existing drive letter on Windows
             const { homedir } = await import('node:os');
             const home = homedir();
-            const roots = process.platform === 'win32'
-              ? [home, pathJoin(home, 'Documents'), pathJoin(home, '.dsh'), 'C:\\', 'D:\\']
-              : [home, '/home', '/Users', '/tmp'];
-            return send(res, 200, { path: '', parent: null, dirs: roots.filter(existsSync).map(p => ({ name: basename(p) || p, path: p })) });
+            const drives = process.platform === 'win32'
+              ? 'CDEFGHIJKLMNOPQRSTUVWXYZ'.split('').map(l => `${l}:\\`).filter(existsSync) : ['/'];
+            const shortcuts = [home, pathJoin(home, 'Desktop'), pathJoin(home, 'Documents')].filter(existsSync);
+            const dirs = [...shortcuts.map(p => ({ name: basename(p) || p, path: p, shortcut: true })),
+              ...drives.map(p => ({ name: p, path: p, drive: true }))];
+            return send(res, 200, { path: '', parent: null, dirs });
           }
           const abs = pathResolve(reqPath);
           const dirs = [];
           try {
-            for (const name of rd(abs)) {
-              const full = pathJoin(abs, name);
-              try { if (statSync(full).isDirectory()) dirs.push({ name, path: full }); } catch {}
+            for (const ent of rd(abs, { withFileTypes: true })) {
+              if (ent.name.startsWith('$') || ent.name === 'System Volume Information') continue;
+              const full = pathJoin(abs, ent.name);
+              try { if (ent.isDirectory() || (ent.isSymbolicLink() && statSync(full).isDirectory())) dirs.push({ name: ent.name, path: full }); } catch {}
             }
-          } catch {}
-          dirs.sort((a, b) => a.name.localeCompare(b.name));
-          return send(res, 200, { path: abs, parent: dirname(abs) === abs ? null : dirname(abs), dirs: dirs.slice(0, 200) });
+          } catch (err) { return send(res, 400, { error: `无法读取：${err.code ?? err.message}` }); }
+          dirs.sort((a, b) => a.name.localeCompare(b.name, 'zh'));
+          return send(res, 200, { path: abs, parent: dirname(abs) === abs ? '' : dirname(abs), dirs: dirs.slice(0, 500), truncated: dirs.length > 500 });
         } catch (err) { return send(res, 400, { error: err.message }); }
       },
     }));
