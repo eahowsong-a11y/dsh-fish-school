@@ -112,34 +112,26 @@ jobs:
 
             ## Upgrade
 
-            No uninstall needed. Both paths below were tested on 1.4.0:
+            **One-Click Update (Recommended)**
+            Use the built-in update feature in DSH:
+            1. Open Fish School settings in DSH
+            2. Click "Check for Updates"
+            3. Click "Update" button when available
+            4. Plugin updates automatically, no restart needed!
 
-            **Standard — requires a DSH restart**
-            ```powershell
-            cd C:\harper\dsh-fish-school
-            .\update-local.ps1 -Version "${{ needs.prepare.outputs.version }}"
-            ```
-            `pnpm install` replaces `node_modules\@local\fish-school`, so DSH answers
-            `restart-required (package-moved)`. Quit and reopen DSH; a page refresh
-            is not enough.
+            **Manual Update**
+            1. Download `fish-${{ needs.prepare.outputs.version }}.tgz` from this release
+            2. Navigate to your DSH profile directory:
+               ```powershell
+               cd $env:USERPROFILE\.dsh\profiles\desktop
+               ```
+            3. Update the plugin reference in package.json if needed, then:
+               ```powershell
+               pnpm install --no-frozen-lockfile
+               ```
+            4. Restart DSH or reload the plugin in Settings → Plugins
 
-            **Hot — no restart**
-            ```powershell
-            .\update-local.ps1 -Version "${{ needs.prepare.outputs.version }}" -Hot
-            ```
-            Overwrites the files in place, then reload the plugin in
-            Settings → Plugins → fish-school.
-
-            **Manual**
-            1. Download `fish-${{ needs.prepare.outputs.version }}.tgz` and save it as
-               `C:\harper\fish.tgz`
-            2. `cd $env:USERPROFILE\.dsh\profiles\desktop`
-            3. `pnpm install --no-frozen-lockfile`
-            4. Restart DSH
-
-            Knowledge and conversations live in
-            `%USERPROFILE%\.dsh\profiles\desktop\fish-school\` and are untouched by
-            an upgrade.
+            **Note:** Your knowledge and conversations in the fish-school directory are preserved during updates.
 
             ## What's New
             See commit log for details.

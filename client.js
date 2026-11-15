@@ -99,14 +99,14 @@ window.__ModuleLoader__.load({
         syncScanning: '扫描中…', syncImporting: '导入中…', syncProgress: '{done}/{total}', syncDone: '已同步', syncError: '出错', syncOverLimit: '超出上限',
         uploadFolder: '上传文件夹', uploadFolderDrop: '或拖入文件夹', uploadFolderCount: '{n} 个文件，{kb} KB',
         uploadFolderSkipped: '{n} 个已跳过（二进制/过大）', uploadFolderProgress: '{done}/{total} 已上传',
-        updateBtn: '一键更新', updating: '更新中…', updateDone: '已更新！重启 DSH 生效。',
+        updateBtn: '一键更新', updating: '更新中…', updateDone: '更新完成！刷新页面生效。',
         recentRefs: '最近引用', browseFish: '按鱼浏览', refBack: '← 全部鱼', refSearchPlaceholder: '搜索…',
         offline: '离线', shareManual: '手动', shareUpload: '上传', shareName: '名称', noShares: '还没有共享单元。',
         refNoMatch: '没有匹配项', refKeys: '↑↓ 选择 · Enter 插入 · Esc 关闭',
         preview: '预览', previewClose: '关闭', previewLoading: '加载中…', previewError: '无法加载内容',
         tabManual: '手动发布', tabFolder: '文件夹', tabProject: '项目会话',
         folderSyncHint: '🔄 自动监控文件变化', projectSyncHint: '🔄 自动同步会话',
-        updateRestart: '更新完成！请重启 DSH 或 <a href="javascript:location.reload()" style="color:var(--dsw-alias-brand-primary);text-decoration:underline">刷新页面</a> 使新版本生效。',
+        updateRestart: '更新完成！插件已自动重载，新版本已生效。',
         searchPlaceholder: '搜索标题、路径、标签…', searchClear: '清空',
       },
     };
@@ -351,8 +351,10 @@ window.__ModuleLoader__.load({
               try {
                 const status = await api('/update/status');
                 if (status.state === 'done') {
-                  setUpdateMsg(t('updateDone'));
+                  setUpdateMsg(t('updateRestart'));
                   setIsUpdating(false);
+                  // 触发页面刷新以加载新版本
+                  setTimeout(() => location.reload(), 1500);
                   return;
                 } else if (status.state === 'error') {
                   setUpdateMsg(status.message || t('updateFailed'));
