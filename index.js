@@ -867,6 +867,160 @@ export function apply(ctx, config = {}) {
         return { success: true, entries: remote };
       }
     ));
+
+    // ---- Index-based tools for lightweight metadata browsing ----
+    tools.register(toolDef('fish_school_get_index', 'Get lightweight index cards (metadata only, no content) to help decide what to load',
+      {
+        properties: {
+          fishName: { type: 'string', description: 'Specific fish name to get index from; omit for all public indexes' },
+          type: { type: 'string', description: 'Filter by type: knowledge, conversation, or file' },
+          tags: { type: 'string', description: 'Filter by tags (comma-separated)' },
+          limit: { type: 'number', description: 'Maximum number of cards', default: 20 },
+        },
+      },
+      async ({ fishName, type, tags, limit = 20 }) => {
+        // Get local index cards (items without bodies)
+        const localCards = store.search({ type, tags, limit, includePrivate: false });
+        let cards = localCards;
+        
+        // Filter by fish name if specified
+        if (fishName) {
+          cards = cards.filter(c => c.author === fishName);
+        }
+        
+        // Try to get remote cards from peers
+        if (!fishName) {
+          const remoteSet = await network.searchPeers({ type, tags, limit }).catch(() => []);
+          const remoteCards = remoteSet.flatMap(r => r.results || []);
+          cards = [...cards, ...remoteCards].slice(0, Math.max(1, Math.min(limit, 100)));
+        }
+        
+        // Format as lightweight index cards
+        const indexCards = cards.map(c => ({
+          id: c.id,
+          type: c.type,
+          title: c.title || c.summary || c.name || '(Untitled)',
+          summary: c.summary || c.excerpt || '',
+          tags: c.tags || [],
+          author: c.author,
+          contentSize: c.size,
+          messageCount: c.messageCount,
+          fileName: c.name,
+          createdAt: c.createdAt,
+        }));
+        
+        return {
+          success: true,
+          cards: indexCards,
+          count: indexCards.length,
+          message: `📇 Index: ${indexCards.length} item(s) available${fishName ? ` from ${fishName}` : ''}`,
+        };
+      }
+    ));
+
+    tools.register(toolDef('fish_school_get_content', 'Get full content for a specific entry by ID after reviewing the index',
+      {
+        properties: {
+          id: { type: 'string', description: 'Entry ID to fetch' },
+          fishName: { type: 'string', description: 'Fish name (author) — omit for local, provide to fetch from a specific peer' },
+        },
+        required: ['id'],
+      },
+      async ({ id, fishName }) => {
+        // Try local first if no specific fish requested
+        if (!fishName) {
+          const item = store.getItem(id);
+          if (item) {
+            const body = await contentOf(item);
+            if (body) {
+              if (item.type === 'knowledge') {
+                return {
+                  success: true,
+                  type: 'knowledge',
+                  id,
+                  title: item.summary || '(knowledge)',
+                  author: item.author,
+                  tags: item.tags || [],
+                  contentSize: body.content?.length || 0,
+                  content: String(body.content || '').slice(0, 100000),
+                  message: `📄 Loaded knowledge (${body.content?.length || 0} bytes)`,
+                };
+              } else if (item.type === 'conversation') {
+                const messages = body.messages || [];
+                const content = messages.slice(-100)
+                  .map(m => `[${m.role}] ${String(m.text || '')}`)
+                  .join('\n');
+                return {
+                  success: true,
+                  type: 'conversation',
+                  id,
+                  title: item.title || '(conversation)',
+                  author: item.author,
+                  tags: item.tags || [],
+                  messageCount: messages.length,
+                  content: content.slice(0, 100000),
+                  message: `💬 Loaded conversation (${messages.length} messages)`,
+                };
+              } else if (item.type === 'file') {
+                return {
+                  success: true,
+                  type: 'file',
+                  id,
+                  title: item.name || item.path || '(file)',
+                  path: item.path,
+                  author: item.author,
+                  contentSize: body.content?.length || 0,
+                  content: String(body.content || '').slice(0, 100000),
+                  message: `📁 Loaded file (${body.content?.length || 0} bytes)`,
+                };
+              }
+            }
+          }
+        }
+
+        // Try remote peers
+        const targetPeers = fishName
+          ? network.peersFor(fishName)
+          : network.listPeers();
+
+        for (const peer of targetPeers) {
+          const entry = await network.getFromPeer(peer, id).catch(() => null);
+          if (entry) {
+            if (entry.type === 'conversation' || Array.isArray(entry.messages)) {
+              const messages = Array.isArray(entry.messages) ? entry.messages : [];
+              const content = messages.slice(-100)
+                .map(m => `[${m.role}] ${String(m.text || '')}`)
+                .join('\n');
+              return {
+                success: true,
+                type: 'conversation',
+                id,
+                title: entry.title || '(conversation)',
+                author: entry.author || peer.name,
+                tags: entry.tags || [],
+                messageCount: messages.length,
+                content: content.slice(0, 100000),
+                message: `💬 Loaded conversation from ${entry.author || peer.name} (${messages.length} messages)`,
+              };
+            } else {
+              return {
+                success: true,
+                type: entry.type || 'knowledge',
+                id,
+                title: entry.summary || entry.name || '(knowledge)',
+                author: entry.author || peer.name,
+                tags: entry.tags || [],
+                contentSize: entry.content?.length || 0,
+                content: String(entry.content || '').slice(0, 100000),
+                message: `📄 Loaded from ${entry.author || peer.name} (${entry.content?.length || 0} bytes)`,
+              };
+            }
+          }
+        }
+
+        throw new Error(`Content not found or not public: ${id}`);
+      }
+    ));
   }
 
   // ---- Sidebar + system prompt ----
@@ -904,11 +1058,19 @@ export function apply(ctx, config = {}) {
 
 You have access to the Fish School tool suite for sharing knowledge across LAN DeepSeek Harness instances.
 
+## Workflow for discovering and loading knowledge
+1. Call **fish_school_get_index** to browse lightweight index cards (metadata only, fast)
+2. Review the index: each card shows title, summary, author, tags, and size estimates
+3. Call **fish_school_get_content** to fetch full content for entries you actually need
+4. This 2-step approach lets you decide what is relevant before loading large files
+
 ## Available Tools
+- **fish_school_get_index**(fishName?, type?, tags?, limit?): Get lightweight index cards (metadata only)
+- **fish_school_get_content**(id, fishName?): Get full content for a specific entry by ID
 - **fish_school_read**(refs): Load content behind @fish/type/id tokens
 - **fish_school_publish**(summary, content, tags?, isPublic?): Publish knowledge
 - **fish_school_share_conversation**(title, tags?, isPublic?): Share this conversation
-- **fish_school_query**(query, tags?, type?, fishName?, limit?): Search the network
+- **fish_school_query**(query, tags?, type?, fishName?, limit?): Full-text search across the network
 - **fish_school_list**(limit?, tags?, type?, fishName?): Browse recent entries
 - **fish_school_get_conversation**(conversationId, fishName?): Load a conversation
 - **fish_school_find_knowledge**(fishName?, type?, limit?): Browse by author
